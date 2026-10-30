@@ -1,0 +1,13 @@
+.venv/
+.cache/
+.tmp/
+.local/
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+!.env.example
+*session*.json
+build/
+dist/
+*.egg-info/

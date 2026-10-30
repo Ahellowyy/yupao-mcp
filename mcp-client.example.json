@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "yupao": {
+      "command": "C:\\path\\to\\yupao-mcp\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "yupao_mcp"
+      ]
+    }
+  }
+}
