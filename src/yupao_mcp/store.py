@@ -88,11 +88,11 @@ class Store:
             db.execute("UPDATE actions SET status='expired' WHERE expires<? AND status IN "
                        "('awaiting_confirmation','approved')", (now,))
             existing = db.execute("SELECT * FROM actions WHERE dedupe_key=? AND status IN "
-                                  "('awaiting_confirmation','approved','dispatching','sent','submitted','outcome_unknown')",
+                                  "('awaiting_confirmation','approved','dispatching','sent','submitted','outcome_unknown','rejected')",
                                   (identity,)).fetchone()
             if existing:
-                if existing['status'] in ('sent', 'submitted', 'dispatching', 'outcome_unknown'):
-                    raise YupaoError('DUPLICATE_OR_UNKNOWN_ACTION', '相同操作已执行或结果待核实，禁止再次发送')
+                if existing['status'] in ('sent', 'submitted', 'dispatching', 'outcome_unknown', 'rejected'):
+                    raise YupaoError('DUPLICATE_OR_UNKNOWN_ACTION', '相同操作已执行、被平台拒绝或结果待核实，禁止再次发送')
                 if existing['review_hash'] == review_hash:
                     if existing['status'] == 'awaiting_confirmation':
                         db.execute('UPDATE actions SET expires=? WHERE id=?', (now + 1800, existing['id']))

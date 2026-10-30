@@ -209,6 +209,9 @@ class ChatReader:
                 details = {'sdk_error_code': sdk_code, 'sdk_send_invoked': invoked}
                 if isinstance(planned, str) and len(planned) <= 200:
                     details['planned_message_id'] = planned
+                if sdk_code == '80001':
+                    details['delivery_rejected'] = True
+                    raise YupaoError('MESSAGE_CONTENT_REJECTED', '平台文本内容审核拒绝下发；不会自动重试', details=details)
                 raise YupaoError('SEND_NOT_STARTED' if invoked is False else 'SEND_RESULT_UNKNOWN',
                     'SDK 未调用发送接口；请核对同步状态' if invoked is False else 'SDK 未确认发送结果，禁止自动重发',
                     details=details)

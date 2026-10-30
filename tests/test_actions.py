@@ -187,3 +187,16 @@ def test_sdk_pre_dispatch_diagnostic_is_preserved_with_completed_chat_initializa
     assert result['receipt']['sdk_send_invoked'] is False
     assert result['receipt']['sdk_error_code'] == 'SDK_SYNC_INCOMPLETE'
     assert result['retry_allowed'] is False and service.chat.sent == []
+
+
+def test_known_content_rejection_is_not_unknown_and_same_payload_cannot_repeat(service, monkeypatch):
+    monkeypatch.setenv('YUPAO_ENABLE_WRITES', '1')
+    action = prepare(service); approve(service, action)
+    async def rejected(*args, **kwargs):
+        raise YupaoError('MESSAGE_CONTENT_REJECTED', 'Platform rejected',
+            details={'sdk_error_code': '80001', 'sdk_send_invoked': True, 'delivery_rejected': True})
+    service.chat.send_confirmed_text = rejected
+    result = asyncio.run(service.execute(action['id']))
+    assert result['status'] == 'rejected' and result['receipt']['outcome_unknown'] is False
+    assert result['retry_allowed'] is False
+    with pytest.raises(YupaoError): prepare(service)

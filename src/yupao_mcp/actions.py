@@ -215,8 +215,9 @@ class ActionService:
                        'outcome_unknown': True, 'retry_allowed': False}
             if isinstance(exc, YupaoError):
                 receipt.update({k: v for k, v in exc.details.items()
-                    if k in ('sdk_error_code', 'sdk_send_invoked', 'planned_message_id')})
-            status = 'outcome_unknown'
+                    if k in ('sdk_error_code', 'sdk_send_invoked', 'planned_message_id', 'delivery_rejected')})
+            status = 'rejected' if receipt.get('delivery_rejected') is True else 'outcome_unknown'
+            receipt['outcome_unknown'] = status == 'outcome_unknown'
         self.store.finish(action_id, status, receipt)
         return {'action_id': action_id, 'status': status, 'receipt': receipt,
                 'execution_success': status in ('sent', 'submitted'), 'retry_allowed': False}

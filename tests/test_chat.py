@@ -90,6 +90,24 @@ def test_each_message_must_match_the_requested_conversation():
     assert error.value.code == 'SDK_SCHEMA_CHANGED'
 
 
+def test_sdk_content_rejection_is_reported_as_definite_rejection(monkeypatch):
+    monkeypatch.setenv('YUPAO_ENABLE_WRITES', '1')
+    reader = ChatReader(client())
+    async def ready(): pass
+    async def close(): pass
+    class Page:
+        async def evaluate(self, *args):
+            return {'ok': False, 'code': '80001', 'send_invoked': True, 'planned_message_id': 'example-message'}
+    reader._ensure_ready = ready
+    reader._close_resources = close
+    reader._page = Page()
+    with pytest.raises(YupaoError) as error:
+        asyncio.run(reader.send_confirmed_text('C2Cperson', 'approved text'))
+    assert error.value.code == 'MESSAGE_CONTENT_REJECTED'
+    assert error.value.details['delivery_rejected'] is True
+    assert error.value.details['sdk_error_code'] == '80001'
+
+
 def test_chat_metadata_does_not_expose_unrequested_identity_or_contact_details(tmp_path):
     session = tmp_path / 'session.json'
     session.write_text(json.dumps({'token': 'test-token', 'userrole': 2}))

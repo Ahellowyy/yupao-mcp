@@ -153,6 +153,8 @@ $env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
 
 执行状态为 `awaiting_confirmation` → `approved` → `dispatching` → `sent` / `submitted` / `outcome_unknown`。SDK 返回消息 ID 后还需回读相同接收方和正文；附件投递需回查平台投递状态。受理、确认出现在历史、送达、已读分别记录，不混为一谈。超时、进程中断或结果不明时保留预约，不自动重发；已有受理回执也不会因后续读取失败而丢失。
 
+明确的服务端内容拒绝另记为 `rejected`。0.4.2 识别腾讯云 `80001`，返回 `MESSAGE_CONTENT_REJECTED`，保留 SDK 错误码与计划消息 ID，不再把明确拒绝仅描述为未知。相同正文的拒绝记录会阻止重复创建；程序不自动修改文案重试。错误码说明见 [腾讯云官方文档](https://intl.cloud.tencent.com/zh/document/product/1047/34348)。该错误不提供具体命中的文字或链接，不能擅自推断触发项。
+
 0.4.1 修复：真实环境复现了 `SDK_READY` 已触发而 `isSyncCompleted=false` 的启动阶段。发送路径现与读取路径一样，最多等待 15 秒让会话同步完成，再检查接收方及创建消息；同步未完成时不调用 `sendMessage`。失败回执保留脱敏 SDK 错误码、`sdk_send_invoked` 和可用的计划消息 ID，便于区分本地拦截和发送调用后的结果未知。此修复不会清除旧的未知结果记录，回查未发现正文也不会自行重发。
 
 ### 消息与简历流程核对
@@ -205,7 +207,7 @@ $env:YUPAO_MATCH_TEXT_FILE = "C:\path\to\private-profile.txt"
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_workflows.py
 ```
 
-2026-10-30：MCP 发现 23 个工具，82 项 Python 测试、10 项 JavaScript 测试通过。真实只读验证覆盖搜索、完整 JD、账号、附件、SDK 会话与消息、本地预设筛选、候选池、宿主 AI 分析保存和消息预览；写入关闭时执行工具确实返回拒绝。经明确批准的首次真实尝试验证了开聊及接收方回查，但正文发送结果仍未确认；修复后的正文发送尚待新的明确批准，附件投递未实测。离线回归另覆盖 SDK_READY 之后的会话同步等待和发送调用阶段记录。
+2026-10-30：MCP 发现 23 个工具，84 项 Python 测试、10 项 JavaScript 测试通过。真实只读验证覆盖搜索、完整 JD、账号、附件、SDK 会话与消息、本地预设筛选、候选池、宿主 AI 分析保存和消息预览；写入关闭时执行工具确实返回拒绝。经明确批准的首次真实尝试验证了开聊及接收方回查，但正文发送结果仍未确认；后续经单独批准的正文试发明确收到内容审核拒绝 80001，独立完整历史回查未发现正文或计划消息 ID；拒绝已记录，不继续重试。附件投递未实测。离线回归另覆盖 SDK_READY 之后的会话同步等待和发送调用阶段记录。
 
 联网验证脚本会将本机结果保存到 `.local/live-smoke-result.json`、`.local/authenticated-mcp-smoke.json`、`.local/chat-mcp-result.json`。会话名单与消息仅保存在本机，不随仓库分发。账号文件、草稿、虚拟环境和缓存均在 `.gitignore` 中排除。
 
