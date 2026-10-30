@@ -26,6 +26,8 @@ class ResumeClient(Client):
         self.after_send = lambda: None
     def chat_resume_context(self, target):
         return {'can_send': self.allowed, 'blockers': [] if self.allowed else ['没有附件权限']}
+    def resolve_contact_target(self, business_id, job_id):
+        return {**TARGET, 'conversation_id': 'C2Cperson'}
     def send_chat_resume(self, target, file_id):
         self.resume_calls.append((target, file_id))
         self.after_send()
@@ -162,6 +164,56 @@ def test_unrecognized_or_missing_attachment_metadata_stops_before_send(service):
         with pytest.raises(YupaoError) as e: prepare(service)
         assert e.value.code == 'RESUME_HISTORY_UNKNOWN'
     assert not service.client.resume_calls
+
+
+def test_first_chat_resume_preview_is_read_only_and_executes_exact_attachment_once(service, monkeypatch):
+    monkeypatch.setenv('YUPAO_ENABLE_WRITES', '1')
+    a = asyncio.run(service.prepare_new_resume('Job123', 'resume123'))
+    assert a['review']['attachment_permission'] == 'check_after_conversation_initialization'
+    assert not service.client.app_calls and not service.client.resume_calls
+    with pytest.raises(YupaoError): asyncio.run(service.execute(a['id']))
+    approve(service, a)
+    r = asyncio.run(service.execute(a['id']))
+    assert r['status'] == 'sent' and r['receipt']['conversation_initialized'] is True
+    assert r['receipt']['resume_send_invoked'] and len(service.client.resume_calls) == 1
+    assert service.client.app_calls == 1 and not service.chat.sent
+    with pytest.raises(YupaoError): asyncio.run(service.execute(a['id']))
+
+
+@pytest.mark.parametrize('failure', ['permission', 'receiver', 'duplicate', 'history'])
+def test_new_chat_failure_preserves_initialization_and_never_sends_attachment(service, monkeypatch, failure):
+    monkeypatch.setenv('YUPAO_ENABLE_WRITES', '1')
+    a = asyncio.run(service.prepare_new_resume('Job123', 'resume123')); approve(service, a)
+    if failure == 'permission': service.client.allowed = False
+    elif failure == 'receiver':
+        def fail(*args): raise YupaoError('JOB_CONVERSATION_MISMATCH', 'wrong receiver')
+        service.client.resolve_contact_target = fail
+    elif failure == 'duplicate': service.chat.messages.append(card())
+    else: service.chat.fail_history = True
+    r = asyncio.run(service.execute(a['id']))
+    assert r['status'] == 'outcome_unknown' and r['receipt']['conversation_initialized'] is True
+    assert r['receipt']['resume_send_invoked'] is False and not r['retry_allowed']
+    assert service.client.app_calls == 1 and not service.client.resume_calls and not service.chat.sent
+
+
+@pytest.mark.parametrize('change', ['owner', 'resume', 'contacted', 'applied', 'free', 'job', 'account'])
+def test_new_resume_preflight_rejects_changes_before_any_contact(service, monkeypatch, change):
+    monkeypatch.setenv('YUPAO_ENABLE_WRITES', '1')
+    a = asyncio.run(service.prepare_new_resume('Job123', 'resume123')); approve(service, a)
+    original = service.client.job_action_context
+    def changed(key):
+        d = original(key)
+        if change == 'owner': d['owner_key'] = 'another'
+        elif change == 'contacted': d['already_contacted'] = True
+        elif change == 'applied': d['already_applied'] = True
+        elif change == 'free': d['free_contact_available'] = False
+        return d
+    service.client.job_action_context = changed
+    if change == 'resume': service.client.resume['name'] = 'changed'
+    elif change == 'job': service.client.job['title'] = 'changed'
+    elif change == 'account': service.client.account = 'another'
+    with pytest.raises(YupaoError): asyncio.run(service.execute(a['id']))
+    assert not service.client.app_calls and not service.client.resume_calls
 
 
 def make_client(tmp_path, handler):

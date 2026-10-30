@@ -198,6 +198,26 @@ class ActionService:
                                           {'job_biz_id': job_biz_id, 'message': message})
         return {**self.public_action(action), 'requires_human_confirmation': True, 'message_sent': False}
 
+    async def prepare_new_resume(self, job_biz_id, resume_file_id):
+        account = await asyncio.to_thread(self.client.account_key)
+        context = await asyncio.to_thread(self.client.job_action_context, job_biz_id)
+        resume = await asyncio.to_thread(resume_selection, self.client, resume_file_id, True)
+        blockers = contact_blockers(context)
+        if context['already_applied']:
+            blockers.append('平台显示已有投递，不能作为首次开聊附件操作执行')
+        review = {'operation': '先为指定岗位建立沟通，核实会话附件权限后发送指定简历一次',
+            'company': context['job']['company'], 'job_title': context['job']['title'],
+            'hr_name': context['hr_name'] or '平台未提供姓名（岗位发布者）',
+            'job_biz_id': job_biz_id, 'resume': resume, 'message': None,
+            'account_fingerprint': account[:12], 'can_execute': not blockers, 'blockers': blockers,
+            'platform_side_effects': '会生成平台标准招呼或职位卡片。新会话权限与历史核对通过后才发上述附件；不附加自定义文本、不交换电话微信、不支付。权限不允许时停止，保留已经开聊的事实，不重试。',
+            'cost_policy': 'free_only', 'attachment_permission': 'check_after_conversation_initialization'}
+        payload = {'job_biz_id': job_biz_id, 'job_hash': digest(context['job']), 'start_conversation': True,
+                   'owner_key': context['owner_key'], 'hr_name': context['hr_name'], 'resume': resume}
+        action = self.store.prepare_action(account, 'chat_resume', review, payload,
+            {'job_biz_id': job_biz_id, 'resume_file_id': resume_file_id})
+        return {**self.public_action(action), 'requires_human_confirmation': True, 'resume_sent': False}
+
     async def _preflight(self, action):
         account = await asyncio.to_thread(self.client.account_key)
         if account != action['account']:
@@ -206,6 +226,15 @@ class ActionService:
         if action_review_hash(action['account'], action['kind'], action['review'], action['payload']) != action['review_hash']:
             raise YupaoError('PREVIEW_CHANGED', '预览内容已改变，需重新生成并确认')
         if action['kind'] == 'chat_resume':
+            if payload.get('start_conversation'):
+                context = await asyncio.to_thread(self.client.job_action_context, payload['job_biz_id'])
+                resume = await asyncio.to_thread(resume_selection, self.client, payload['resume']['resume_file_id'], True)
+                if contact_blockers(context) or context['already_applied']:
+                    raise YupaoError('CONTACT_NOT_AVAILABLE', '当前岗位不允许本次免费首次沟通')
+                if (digest(context['job']) != payload['job_hash'] or context['owner_key'] != payload['owner_key']
+                        or context['hr_name'] != payload['hr_name'] or resume != payload['resume']):
+                    raise YupaoError('TARGET_CHANGED', '岗位、发布者或简历已改变，请重新预览')
+                return account, {'new_chat_context': context}
             job = await asyncio.to_thread(self.client.detail, payload['job_biz_id'])
             target = await self._target(payload['target']['conversation_id'], job)
             resume = await asyncio.to_thread(resume_selection, self.client, payload['resume']['resume_file_id'], True)
@@ -270,9 +299,26 @@ class ActionService:
                 receipt['confirmed_in_history'] = confirmed
                 status = 'sent' if confirmed else 'outcome_unknown'
             elif action['kind'] == 'chat_resume':
+                if action['payload'].get('start_conversation'):
+                    job_context = context['new_chat_context']
+                    business_id = await asyncio.to_thread(self.client.initiate_conversation, job_context)
+                    receipt.update(conversation_initialized=True, business_conversation_id=business_id,
+                        platform_auto_content_possible=True, resume_send_invoked=False)
+                    target = await asyncio.to_thread(self.client.resolve_contact_target, business_id,
+                                                    job_context['job']['job_id'])
+                    rights = await asyncio.to_thread(self.client.chat_resume_context, target)
+                    if not rights['can_send']:
+                        raise YupaoError('RESUME_SEND_NOT_AVAILABLE', '会话已建立，但平台未允许发送附件；未发送简历，不自动重试')
+                    await self.chat.list_conversations()
+                    before = await self._resume_history(target)
+                    if self._resume_duplicate(before, target, action['payload']['resume']['resume_file_id']):
+                        raise YupaoError('RESUME_ALREADY_SHARED', '会话中已存在附件或待处理请求，未再次发送')
+                    context = {'target': target, 'before_ids': [m['message_id'] for m in before]}
                 target = context['target']
-                receipt = await asyncio.to_thread(self.client.send_chat_resume, target,
-                                                 action['payload']['resume']['resume_file_id'])
+                receipt['resume_send_invoked'] = True
+                sent = await asyncio.to_thread(self.client.send_chat_resume, target,
+                                              action['payload']['resume']['resume_file_id'])
+                receipt.update(sent)
                 messages = await self._resume_history(target)
                 matches = [m for m in messages if m.get('message_id') not in context['before_ids']
                     and m.get('flow') == 'out' and m.get('to') == target['peer_im_id']

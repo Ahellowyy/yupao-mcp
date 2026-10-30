@@ -15,7 +15,7 @@
 | `yupao_list_conversations` | 登录官方 Chat SDK 并等待同步，读取联系人及 HR 岗位资料；默认排除系统助手 |
 | `yupao_get_messages` | 分页读取已同步 C2C 会话的消息；不标记已读、不发送已读回执 |
 | `yupao_prepare_application` | 绑定指定简历，预览普通社招附件投递；缺少简历 ID 时仅保存不可执行草稿 |
-| `yupao_prepare_resume` | 预览已有 HR 会话的指定附件简历发送；核对权限、历史防重，实际发送须另行真人确认 |
+| `yupao_prepare_resume` | 预览指定附件发送；已有会话核对权限和历史，`start_conversation=true` 可预览首次开聊后发简历；须真人确认 |
 | `yupao_prepare_message` | 预览已有 HR 会话消息，或以 `start_conversation=true` 预览免费首次开聊；准备阶段不发送 |
 | `yupao_save_preset` / `yupao_list_presets` / `yupao_remove_preset` | 管理本机搜索预设 |
 | `yupao_search_preset` | 平台搜索后读取完整 JD，在本机筛选，未知条件单列 |
@@ -140,6 +140,7 @@ $env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
 - **首次沟通消息**：使用 `start_conversation=true` 且不传已有会话 ID。预览公司、岗位、发布者、完整正文及平台可能生成的标准招呼。执行器按普通“立即沟通”分支建立业务会话，再回查接收方与岗位关联，最后才通过 SDK 发送这一条正文；不主动交换电话或微信。无法核实接收方时停止，保留已经开聊的事实，不自动重新开聊。
 - **指定附件投递**：`yupao_prepare_application(job_biz_id, resume_file_id)`，只允许已核验的普通白领社招岗位、审核通过的本人附件、明确在招状态、平台附件权限及免费额度。校招、聚合、代理、其他租户、权限不明和付费路径均停止，不混用接口。
 - **已有会话发送附件简历**：先用 `yupao_list_resume_attachments(for_chat=true)` 选择本人审核通过的文件，再调用 `yupao_prepare_resume(job_biz_id, conversation_id, resume_file_id)`。准备阶段只读取并保存预览，不发送附件。执行仍使用 `yupao_execute_action` 的逐次真人确认；不新建会话、不附加文本、不支付或自动解锁。核对 SDK 会话、业务接收方及岗位，检查 `sendMsg` 聊天权益与 `exchangeResumeFile` 入口权限。与网页工具栏一致，仅允许附件权限状态 1 或 3。
+- **首次开聊后发附件**（0.6.0）：`yupao_prepare_resume(job_biz_id, resume_file_id=..., start_conversation=true)`，不传已有会话 ID。预览绑定具体发布者、岗位与附件，并明确平台可能生成标准招呼或职位卡片。确认后按免费普通沟通路径先开聊，回查接收方和岗位，再检查会话附件权限及完整可读历史，最后仅调用一次附件业务接口。不使用岗位页的附件投递权限冒充新会话的附件发送权限；开聊后附件权限不允许、接收方无法核实或已有附件记录时停止，不自动重开或重试。回执保留已开聊的事实及 `resume_send_invoked`，不会将开聊成功当作简历发送成功。预览本身不发起沟通。
 - 不传会话 ID、不选择首次沟通，也不传附件 ID时，兼容旧版不可执行的纯本地草稿。
 
 生成的预览有效期 30 分钟，绑定账号、操作类型、接收方、岗位快照、正文或简历及其 SHA-256 摘要。调用 `yupao_execute_action(action_id)` 后，MCP 宿主须把 `elicitation` 确认弹窗转交真人，不能自动接受或由 Agent 代答。工具没有 `yes=true` 或修改正文参数。
@@ -211,7 +212,7 @@ $env:YUPAO_MATCH_TEXT_FILE = "C:\path\to\private-profile.txt"
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_workflows.py
 ```
 
-2026-10-30：MCP 提供 24 个工具，115 项 Python 测试、11 项 JavaScript 测试通过。真实只读验证覆盖搜索、完整 JD、账号、附件、SDK 会话与消息、本地预设筛选、候选池、宿主 AI 分析保存和消息预览；写入关闭时执行工具确实返回拒绝。经明确批准的首次真实尝试验证了开聊及接收方回查，但正文发送结果仍未确认；后续经单独批准的正文试发明确收到内容审核拒绝 80001，独立完整历史回查未发现正文或计划消息 ID；拒绝已记录，不继续重试。新增聊天附件功能已通过 MCP 真实只读预览验证：能识别既有附件卡片并阻止重复发送，关闭写入时执行工具返回 WRITES_DISABLED；未进行自动附件实发。附件投递未实测。离线回归另覆盖 SDK_READY 之后的会话同步等待和发送调用阶段记录。
+2026-10-30：MCP 提供 24 个工具，127 项 Python 测试、11 项 JavaScript 测试通过。真实只读验证覆盖搜索、完整 JD、账号、附件、SDK 会话与消息、本地预设筛选、候选池、宿主 AI 分析保存和消息预览；写入关闭时执行工具确实返回拒绝。经明确批准的首次真实尝试验证了开聊及接收方回查，但正文发送结果仍未确认；后续经单独批准的正文试发明确收到内容审核拒绝 80001，独立完整历史回查未发现正文或计划消息 ID；拒绝已记录，不继续重试。新增聊天附件功能已通过 MCP 真实只读预览验证：能识别既有附件卡片并阻止重复发送，关闭写入时执行工具返回 WRITES_DISABLED；未进行自动附件实发。附件投递未实测。离线回归另覆盖 SDK_READY 之后的会话同步等待和发送调用阶段记录。
 
 联网验证脚本会将本机结果保存到 `.local/live-smoke-result.json`、`.local/authenticated-mcp-smoke.json`、`.local/chat-mcp-result.json`。会话名单与消息仅保存在本机，不随仓库分发。账号文件、草稿、虚拟环境和缓存均在 `.gitignore` 中排除。
 

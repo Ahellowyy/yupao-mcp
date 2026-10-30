@@ -128,8 +128,13 @@ def yupao_prepare_application(job_biz_id: str, resume_file_id: str = '') -> dict
 
 
 @mcp.tool(annotations=DRAFT)
-async def yupao_prepare_resume(job_biz_id: str, conversation_id: str, resume_file_id: str) -> dict:
-    """预览向已有 HR 会话发送本人指定附件简历，核对权限及历史防重；需逐次真人确认，不发送文本。"""
+async def yupao_prepare_resume(job_biz_id: str, conversation_id: str = '', resume_file_id: str = '',
+                               start_conversation: bool = False) -> dict:
+    """预览指定附件发送；首次开聊须 start_conversation=true，预览会注明标准招呼及开聊后权限检查。须真人确认。"""
+    if start_conversation:
+        if conversation_id:
+            return {'ok': False, 'error': {'code': 'INVALID_ARGUMENT', 'message': '已有会话与首次开聊不能同时选择'}}
+        return await async_call(actions.prepare_new_resume, job_biz_id, resume_file_id)
     return await async_call(actions.prepare_resume, job_biz_id, conversation_id, resume_file_id)
 
 
