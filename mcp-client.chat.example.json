@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "yupao": {
+      "command": "C:\\path\\to\\yupao-mcp\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "yupao_mcp"],
+      "env": {
+        "YUPAO_SESSION_FILE": "C:\\path\\to\\yupao-mcp\\.local\\session.json",
+        "YUPAO_CHAT_SDK_FILE": "C:\\path\\to\\yupao-mcp\\.cache\\chat-3.6.7\\index.js",
+        "YUPAO_CHAT_BROWSER": "chrome"
+      }
+    }
+  }
+}

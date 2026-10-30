@@ -23,9 +23,10 @@ READ_ENDPOINTS = {
     'resume_attachments': '/resume/v3/attach/myAttach',
     'chat_resume_attachments': '/resume/v3/attach/myImAttach',
     'im_credentials': '/reach/v2/im/account/getImToken',
+    'chat_metadata': '/reach/v2/im/chat/pcList',
 }
 AUTHENTICATED_READS = frozenset({'profile', 'resume_attachments',
-                               'chat_resume_attachments', 'im_credentials'})
+                               'chat_resume_attachments', 'im_credentials', 'chat_metadata'})
 CITY_IDS = {'全国': 1, '北京': 2, '上海': 25, '广州': 76, '深圳': 77,
             '杭州': 383, '成都': 322, '南京': 220, '苏州': 221, '武汉': 180}
 
@@ -224,3 +225,28 @@ class YupaoClient:
                 'sdk_login_verified': False, 'send_verified': False,
                 'credentials_returned': False,
                 'message': '鱼泡已返回 IM 登录资料；未登录 SDK，未发送消息。'}
+
+    def get_chat_metadata(self, peer_im_ids):
+        if (not isinstance(peer_im_ids, list) or not 1 <= len(peer_im_ids) <= 50
+                or any(not isinstance(x, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', x)
+                       for x in peer_im_ids)):
+            raise YupaoError('INVALID_ARGUMENT', '每次仅支持 1–50 个已知会话的 IM 账号')
+        data = self.post('chat_metadata', {'toUserImIdList': list(dict.fromkeys(peer_im_ids))})
+        if not isinstance(data, dict) or not isinstance(data.get('list'), list):
+            raise YupaoError('SCHEMA_CHANGED', '鱼泡会话资料列表结构改变')
+        rows = []
+        for item in data['list']:
+            if not isinstance(item, dict) or item.get('toUserImId') not in peer_im_ids:
+                raise YupaoError('SCHEMA_CHANGED', '返回的会话资料身份不匹配')
+            job = item.get('jobShowInfo') or {}
+            if not isinstance(job, dict):
+                raise YupaoError('SCHEMA_CHANGED', '会话岗位资料结构改变')
+            business_id = item.get('conversationId')
+            rows.append({'peer_im_id': item['toUserImId'],
+                         'business_conversation_id': str(business_id) if business_id else None,
+                         'name': plain(item.get('toUserRemark') or item.get('toUserName')),
+                         'company': plain(job.get('jobEnterpriseName')),
+                         'job_title': plain(job.get('jobOccName')),
+                         'salary': plain(job.get('jobSalary')),
+                         'related_job_id': str(item['relatedJobId']) if item.get('relatedJobId') else None})
+        return rows

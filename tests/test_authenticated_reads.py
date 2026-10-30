@@ -14,7 +14,7 @@ def session_file(tmp_path):
 
 
 @pytest.mark.parametrize('operation', [
-    'profile', 'resume_attachments', 'chat_resume_attachments', 'im_credentials',
+    'profile', 'resume_attachments', 'chat_resume_attachments', 'im_credentials', 'chat_metadata',
 ])
 def test_authenticated_reads_require_explicit_session(monkeypatch, operation):
     monkeypatch.delenv('YUPAO_SESSION_FILE', raising=False)

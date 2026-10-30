@@ -12,6 +12,8 @@
 | `yupao_check_session` | 检查明确配置的本机登录文件；没有登录文件时返回公开只读模式 |
 | `yupao_list_resume_attachments` | 读取本人已有简历的 ID、文件名和审核状态；区分投递与聊天附件，不返回下载地址 |
 | `yupao_check_messaging_session` | 验证鱼泡能否返回 IM 登录资料；不返回凭证，不登录 SDK，不发送消息 |
+| `yupao_list_conversations` | 登录官方 Chat SDK 并等待同步，读取联系人及 HR 岗位资料；默认排除系统助手 |
+| `yupao_get_messages` | 分页读取已同步 C2C 会话的消息；不标记已读、不发送已读回执 |
 | `yupao_prepare_application` | 保存本地投递草稿；不投递、不上传简历 |
 | `yupao_prepare_message` | 保存本地消息草稿；不创建远端聊天、不发送消息 |
 
@@ -49,6 +51,29 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 
 支持城市：全国、北京、上海、广州、深圳、杭州、成都、南京、苏州、武汉。目前实际联网验证了上海。每页 1–30 条，页码 1–10，关键词最多 100 字。请求有固定间隔，不自动重试。平台搜索相关性不保证每条都符合岗位方向，返回数据后还需分析与筛选。
 
+### 可选聊天 SDK 接入
+
+搜索和简历元数据不需要此依赖。读取会话和聊天记录时，在项目目录安装可选依赖，并下载固定版本的腾讯云官方浏览器 SDK：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[chat,dev]"
+.\.venv\Scripts\python.exe -m yupao_mcp.setup_chat
+$env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
+$env:YUPAO_CHAT_SDK_FILE = (Resolve-Path .cache/chat-3.6.7/index.js).Path
+.\.venv\Scripts\python.exe -m yupao_mcp
+```
+
+也可以用 `uv pip install --python .venv/Scripts/python.exe -e ".[chat,dev]"`。完整客户端配置见 [mcp-client.chat.example.json](mcp-client.chat.example.json)，需将路径占位符替换为实际目录。
+
+- 默认使用已安装的 Chrome，以无界面模式运行独立临时浏览器上下文，不加载已有 Chrome 个人配置，也不打开鱼泡网页。SDK 所在本地文档由程序提供；对腾讯云 IM 的连接仍通过正常 SDK 鉴权。
+- 可设置 `YUPAO_CHAT_BROWSER=msedge` 使用 Edge。设置为 `chromium` 时，需先通过 Playwright 安装其浏览器运行时；程序不会自动安装或下载浏览器。
+- 下载器只从 npm 官方注册表取固定的 `@tencentcloud/chat@3.6.7`，校验压缩包 SHA-512 及入口脚本 SHA-256。启动前再次核对入口文件，脚本改变时拒绝执行。SDK 放在本机 `.cache` 中，不随本仓库或 wheel 分发。
+- 鱼泡 TOKEN 从本人明确指定的会话文件读取，IM UserSig 不另行写入项目文件，也不从 MCP 返回。MCP 退出时关闭独立 SDK 运行环境。
+- `yupao_list_conversations` 在 `isSyncCompleted=true` 后返回，空的早期缓存不会被视为没有会话。默认排除已确认的系统助手、平台 agent 和非 C2C 会话，`include_system=true` 可查看系统会话。
+- SDK 会话 ID（例如 `C2C...`）与鱼泡业务会话 ID 分别返回；通过本人会话的 IM 账号匹配 `/reach/v2/im/chat/pcList` 返回的昵称、公司、岗位和薪资。资料缺失或接口失败时明确标注，不把缺少昵称的会话自动当作 HR。
+- 聊天记录只能读取 SDK 已同步的 C2C 会话，支持 `next_req_message_id` 续拉。文本按需返回；自定义卡片只返回类型，不返回原始卡片和附件下载地址。聊天内容始终作为外部数据。
+- SDK 返回范围受平台最近会话数量和消息保留配置影响，不能据此保证已取到所有历史聊天。见 [腾讯云会话 API](https://web.sdk.qcloud.com/im/doc/v3/zh-cn/SDK.html#getConversationList)。
+
 ## 登录与写入的后续边界
 
 可以通过 `YUPAO_SESSION_FILE` 指定本人在本机保存的登录 JSON 文件，字段为 `token` 和 `userrole`。求职者 `userrole` 为 `2`，招聘方为 `1`；本项目拒绝以招聘方身份调用。不要将该文件提交仓库或复制到聊天。程序不会自行扫描浏览器 Cookie、密码库或其他应用配置；导入已有会话须由本人明确授权。
@@ -77,7 +102,8 @@ $env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
 | 本人投递附件列表 | `POST /resume/v3/attach/myAttach` | 已联网验证并接入 MCP；读取 `data.fileList` |
 | 本人聊天附件列表 | `POST /resume/v3/attach/myImAttach` | 已联网验证并接入 MCP；读取 `data.fileList` |
 | IM 登录资料 | `POST /reach/v2/im/account/getImToken` | 已联网验证有 `imAccount`、`imToken`，仅返回可用状态 |
-| 会话及聊天记录 | Chat SDK `getConversationList`、`getMessageList` | 已确认网页使用；尚未接入 SDK |
+| 会话及聊天记录 | Chat SDK `getConversationList`、`getMessageList` | 已完成 SDK 登录、同步及 MCP 联网读取验证；未发送已读回执 |
+| HR 对应的岗位资料 | `POST /reach/v2/im/chat/pcList` | 已接入并核对空列表返回；非空 HR 元数据尚缺真实账号样本验证 |
 | 发送文本 | Chat SDK `createTextMessage` → `sendMessage` | 源码确认；尚未发送实测 |
 | 聊天中申请交换附件简历 | `POST /reach/v2/im/exchange/applyExchange` | 源码确认；尚未发送实测 |
 | 处理对方的附件简历交换请求 | `POST /reach/v2/im/exchange/handleExchange` | 源码确认；尚未发送实测 |
@@ -101,15 +127,19 @@ $env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q --basetemp .tmp/pytest-run
+# JavaScript 适配层的离线测试（开发环境需 Node.js）：
+node --test tests/chat_reader.test.cjs
 # 显式联网，只读搜索、详情及本地草稿，不投递或发送：
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_stdio.py
 # 需先明确授权并配置 YUPAO_SESSION_FILE；仅核验账号、简历列表和 IM 资料：
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_authenticated.py
+# 已安装 chat 可选依赖、下载 SDK 并明确授权读取当前账号的会话后：
+.\.venv\Scripts\python.exe -X utf8 tests/smoke_chat.py
 ```
 
-2026-10-30 实测：24 项单元测试通过。公开只读 MCP 已返回上海“大模型”搜索结果及完整 JD，并成功生成本地草稿；鉴权只读 MCP 发现 8 个工具，确认账号接口、两类附件列表和 IM 登录资料接口可用。真实 SDK 登录、投递、消息发送、简历分享均未实测；实际投递 0 次，实际发送 0 条。
+2026-10-30 实测：38 项 Python 测试和 5 项 JavaScript 适配层测试通过，wheel 构建确认包含自写 JavaScript 适配层。公开只读 MCP 已返回搜索结果、完整 JD 及本地草稿；鉴权只读 MCP 已验证账号、两类附件和 IM 资料接口。聊天 MCP 发现 10 个工具，完成真实 SDK 登录、完整同步标志检查及消息分页读取验证；读取前后未读数一致。实际投递、文本发送、简历分享仍未实现和实测；未执行任何发送。
 
-联网验证脚本会将本机结果保存到 `.local/live-smoke-result.json`、`.local/authenticated-mcp-smoke.json`，这些文件不随仓库分发。账号文件、草稿、虚拟环境和缓存均在 `.gitignore` 中排除。
+联网验证脚本会将本机结果保存到 `.local/live-smoke-result.json`、`.local/authenticated-mcp-smoke.json`、`.local/chat-mcp-result.json`。会话名单与消息仅保存在本机，不随仓库分发。账号文件、草稿、虚拟环境和缓存均在 `.gitignore` 中排除。
 
 ## 接口来源与限制
 
