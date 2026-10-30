@@ -25,10 +25,14 @@ def terms(values):
 def salary_range(tags):
     for tag in tags:
         # Only explicit monthly salary ranges; daily/hourly/annual and negotiable stay unknown.
-        match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)\s*(K|k|千|万)(?:元)?(?:/月|·\d+薪)?\s*', tag)
+        match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*(K|k|千|万|元)?\s*[-~至–—]\s*'
+                             r'(\d+(?:\.\d+)?)\s*(K|k|千|万|元)(?:元)?(/月)?(?:·\d+薪)?\s*', tag)
         if match:
-            factor = 10000 if match[3] == '万' else 1000
-            low, high = float(match[1]) * factor, float(match[2]) * factor
+            left_unit, right_unit = match[2] or match[4], match[4]
+            if left_unit == right_unit == '元' and not match[5]:
+                continue
+            factors = {'K': 1000, 'k': 1000, '千': 1000, '万': 10000, '元': 1}
+            low, high = float(match[1]) * factors[left_unit], float(match[3]) * factors[right_unit]
             if 0 <= low <= high:
                 return low, high
     return None

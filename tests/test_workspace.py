@@ -25,6 +25,10 @@ def workspace(tmp_path):
 
 
 @pytest.mark.parametrize('label,expected', [('20-30K·13薪', (20000, 30000)), ('1.3-4万/月', (13000, 40000)),
+    ('2-4万/月·14薪', (20000, 40000)), ('7千-1.4万/月', (7000, 14000)),
+    ('8千-1.2万/月', (8000, 12000)), ('18000-25000元/月', (18000, 25000)),
+    ('1.8–2.5万元/月·13薪', (18000, 25000)), ('18千-25千/月', (18000, 25000)),
+    ('1000-2000元', None), ('30-50万/年·14薪', None),
     ('300-500元/天', None), ('30-50万/年', None), ('面议', None)])
 def test_monthly_salary_is_not_confused_with_daily_or_annual(label, expected):
     assert salary_range([label]) == expected

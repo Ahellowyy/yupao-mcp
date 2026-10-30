@@ -23,9 +23,10 @@ def check_activity(info, condition):
         return 'matched'
     same_day = label in ('今日活跃', '今天活跃', '当天活跃')
     calendar_days = {'昨日活跃': 2, '昨天活跃': 2, '前天活跃': 3}.get(label)
-    days = re.fullmatch(r'([1-9]\d{0,3})天内活跃', label)
-    months = re.fullmatch(r'([1-9]\d{0,2})个月内活跃', label)
-    if not (same_day or calendar_days or days or months):
+    days = re.fullmatch(r'([1-9]\d{0,3})[天日]内活跃', label)
+    weeks = re.fullmatch(r'([1-9]\d{0,2})周内活跃', label)
+    months = re.fullmatch(r'([1-9]\d{0,2})个月内活跃|半年内活跃', label)
+    if not (same_day or calendar_days or days or weeks or months):
         # In particular, "当前未在线" says nothing about the last active date.
         return 'unknown'
     if condition == 'just_now':
@@ -38,6 +39,8 @@ def check_activity(info, condition):
         return 'matched'
     if calendar_days:
         return 'matched' if calendar_days <= limit else 'excluded'
+    if weeks:
+        return 'matched' if int(weeks[1]) * 7 <= limit else 'excluded'
     if months:
         # Do not turn calendar months into an invented exact number of days.
         return 'excluded'
