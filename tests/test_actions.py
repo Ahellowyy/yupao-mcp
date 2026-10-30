@@ -173,3 +173,17 @@ def test_new_target_resolution_failure_does_not_send_or_allow_retry(service, mon
     assert result['status'] == 'outcome_unknown' and result['receipt']['conversation_initialized'] is True
     assert service.chat.sent == []
     with pytest.raises(YupaoError): asyncio.run(service.execute(action['id']))
+
+
+def test_sdk_pre_dispatch_diagnostic_is_preserved_with_completed_chat_initialization(service, monkeypatch):
+    monkeypatch.setenv('YUPAO_ENABLE_WRITES', '1')
+    action = asyncio.run(service.prepare_new_message('Job123', '项目介绍')); approve(service, action)
+    async def blocked(*args, **kwargs):
+        raise YupaoError('SEND_NOT_STARTED', 'SDK not synchronized',
+                         details={'sdk_error_code': 'SDK_SYNC_INCOMPLETE', 'sdk_send_invoked': False})
+    service.chat.send_confirmed_text = blocked
+    result = asyncio.run(service.execute(action['id']))
+    assert result['receipt']['conversation_initialized'] is True
+    assert result['receipt']['sdk_send_invoked'] is False
+    assert result['receipt']['sdk_error_code'] == 'SDK_SYNC_INCOMPLETE'
+    assert result['retry_allowed'] is False and service.chat.sent == []

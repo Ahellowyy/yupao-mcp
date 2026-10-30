@@ -125,7 +125,7 @@ $env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
 
 会话文件缺失、身份不符或服务端拒绝时停止，不能将“文件存在”当作登录有效。附件工具只返回本人文件的必要元数据，不下载简历、不返回可访问文件的地址。
 
-真实写入默认关闭。当前已提供受限的单条执行器，尚未对真实 HR 实发或实投验证；网页源码确认与离线测试不能代替账号实测。网页流程包括：
+真实写入默认关闭。当前已提供受限的单条执行器；普通首次开聊和接收方回查已在真实账号验证，项目正文首次试发未取得可确认结果，不能记为成功，附件投递也尚未实投验证。网页源码确认与离线测试不能代替账号实测。网页流程包括：
 
 - 投递/发起沟通：业务前置检查、`/job/v3/contact/job/im/call`、`/reach/v2/im/chat/init` 等路径；部分岗位使用 `/resume-delivery/v1/delivery/submit`。这些是不同岗位类型的路径，不能一律混用。
 - 文本消息：网页使用腾讯云 Chat SDK，`createTextMessage` 后调用 `sendMessage`，并请求已读回执。本人登录后还需要通过鱼泡获取 SDK 登录资料和 UserSig；不能使用管理员 REST 密钥替代。
@@ -153,6 +153,8 @@ $env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
 
 执行状态为 `awaiting_confirmation` → `approved` → `dispatching` → `sent` / `submitted` / `outcome_unknown`。SDK 返回消息 ID 后还需回读相同接收方和正文；附件投递需回查平台投递状态。受理、确认出现在历史、送达、已读分别记录，不混为一谈。超时、进程中断或结果不明时保留预约，不自动重发；已有受理回执也不会因后续读取失败而丢失。
 
+0.4.1 修复：真实环境复现了 `SDK_READY` 已触发而 `isSyncCompleted=false` 的启动阶段。发送路径现与读取路径一样，最多等待 15 秒让会话同步完成，再检查接收方及创建消息；同步未完成时不调用 `sendMessage`。失败回执保留脱敏 SDK 错误码、`sdk_send_invoked` 和可用的计划消息 ID，便于区分本地拦截和发送调用后的结果未知。此修复不会清除旧的未知结果记录，回查未发现正文也不会自行重发。
+
 ### 消息与简历流程核对
 
 下表的“源码确认”表示在鱼泡公开前端中核对过调用关系和参数，并不表示已对真实 HR 执行过。鉴权只读接口已另行通过本人授权的求职者会话验证。
@@ -166,7 +168,7 @@ $env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
 | HR 对应的岗位资料 | `POST /reach/v2/im/chat/pcList` | 已验证非空会话的姓名、公司、岗位、薪资和业务会话关联 |
 | 业务会话接收方核对 | `POST /reach/v2/im/chat/detailV2` → `pcList` | 已用现有会话验证接收方和岗位身份；不会据此自动发送 |
 | 发送文本 | Chat SDK `createTextMessage` → `sendMessage` | 已实现确认、预约、单次发送及历史核对；仅离线测试，真实发送待明确批准 |
-| 普通首次沟通 | `im/preCheck` → `im/call` → `chat/init` | 已实现受限分支；建立后须回查业务会话与岗位，真实执行待明确批准 |
+| 普通首次沟通 | `im/preCheck` → `im/call` → `chat/init` | 已完成真实开聊及业务会话、岗位接收方核对；平台自动招呼不等于自定义正文已发出 |
 | 普通社招附件投递 | 前置检查 → 联系 → `chat/init`，`postType=1` | 已实现权限检查与回读；真实投递待明确批准 |
 | 聊天中申请交换附件简历 | `POST /reach/v2/im/exchange/applyExchange` | 源码确认；尚未发送实测 |
 | 处理对方的附件简历交换请求 | `POST /reach/v2/im/exchange/handleExchange` | 源码确认；尚未发送实测 |
@@ -203,7 +205,7 @@ $env:YUPAO_MATCH_TEXT_FILE = "C:\path\to\private-profile.txt"
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_workflows.py
 ```
 
-2026-10-30：MCP 发现 23 个工具，81 项 Python 测试、8 项 JavaScript 测试通过。真实只读验证覆盖搜索、完整 JD、账号、附件、SDK 会话与消息、本地预设筛选、候选池、宿主 AI 分析保存和消息预览；写入关闭时执行工具确实返回拒绝。离线测试覆盖确认取消、内容变更、账号变化、过期、并发防重、固定投递参数、首次开聊后接收方核对和结果未知。真实发送与投递仍等待对具体目标的明确批准，没有为测试而联系 HR。
+2026-10-30：MCP 发现 23 个工具，82 项 Python 测试、10 项 JavaScript 测试通过。真实只读验证覆盖搜索、完整 JD、账号、附件、SDK 会话与消息、本地预设筛选、候选池、宿主 AI 分析保存和消息预览；写入关闭时执行工具确实返回拒绝。经明确批准的首次真实尝试验证了开聊及接收方回查，但正文发送结果仍未确认；修复后的正文发送尚待新的明确批准，附件投递未实测。离线回归另覆盖 SDK_READY 之后的会话同步等待和发送调用阶段记录。
 
 联网验证脚本会将本机结果保存到 `.local/live-smoke-result.json`、`.local/authenticated-mcp-smoke.json`、`.local/chat-mcp-result.json`。会话名单与消息仅保存在本机，不随仓库分发。账号文件、草稿、虚拟环境和缓存均在 `.gitignore` 中排除。
 

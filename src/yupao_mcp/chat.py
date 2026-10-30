@@ -200,7 +200,18 @@ class ChatReader:
             if not isinstance(result, dict) or result.get('ok') is not True:
                 self._stopped = True
                 await self._close_resources()
-                raise YupaoError('SEND_RESULT_UNKNOWN', 'SDK 未确认发送结果，禁止自动重发')
+                result = result if isinstance(result, dict) else {}
+                sdk_code = str(result.get('code', 'SDK_SEND_FAILED'))
+                if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', sdk_code):
+                    sdk_code = 'SDK_SEND_FAILED'
+                invoked = result.get('send_invoked') if type(result.get('send_invoked')) is bool else None
+                planned = result.get('planned_message_id')
+                details = {'sdk_error_code': sdk_code, 'sdk_send_invoked': invoked}
+                if isinstance(planned, str) and len(planned) <= 200:
+                    details['planned_message_id'] = planned
+                raise YupaoError('SEND_NOT_STARTED' if invoked is False else 'SEND_RESULT_UNKNOWN',
+                    'SDK 未调用发送接口；请核对同步状态' if invoked is False else 'SDK 未确认发送结果，禁止自动重发',
+                    details=details)
             return result['data']
 
     async def _close_resources(self):

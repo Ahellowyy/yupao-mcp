@@ -30,6 +30,8 @@ def review_text(action):
     lines += ['消息正文：', review.get('message') or '无自定义正文，仅进行上面描述的附件投递。']
     if review.get('platform_side_effects'):
         lines += ['平台行为：' + review['platform_side_effects']]
+    if review.get('retry_notice'):
+        lines += ['再次尝试说明：' + review['retry_notice']]
     if review.get('blockers'):
         lines += ['当前不能执行：' + '；'.join(review['blockers'])]
     lines += ['确认摘要：' + action['review_hash'], '批准仅两分钟有效，不自动重复执行。']
@@ -211,6 +213,9 @@ class ActionService:
             # Once reserved, interrupted/failed requests are not safe to resend automatically.
             receipt = {**receipt, 'error_code': exc.code if isinstance(exc, YupaoError) else 'EXECUTION_INTERRUPTED',
                        'outcome_unknown': True, 'retry_allowed': False}
+            if isinstance(exc, YupaoError):
+                receipt.update({k: v for k, v in exc.details.items()
+                    if k in ('sdk_error_code', 'sdk_send_invoked', 'planned_message_id')})
             status = 'outcome_unknown'
         self.store.finish(action_id, status, receipt)
         return {'action_id': action_id, 'status': status, 'receipt': receipt,

@@ -38,8 +38,9 @@ WRITE_ENDPOINTS = {'application_precheck': '/job/v3/contact/job/im/preCheck',
 
 
 class YupaoError(Exception):
-    def __init__(self, code, message):
+    def __init__(self, code, message, *, details=None):
         self.code, self.message = str(code), str(message)[:240]
+        self.details = details or {}
         super().__init__(self.message)
 
 

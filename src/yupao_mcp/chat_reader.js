@@ -91,13 +91,24 @@
   // This entry point is not exposed as an MCP tool. The Python action service
   // calls it only after a reviewed, approved, account-bound atomic reservation.
   globalThis.__yupaoSdkSendConfirmed = async ({ conversation_id, text, allow_new_peer = false }) => {
-    if (state.stopped || !state.chat?.isReady()) return { ok: false, code: 'SDK_NOT_READY' };
+    if (state.stopped || !state.chat?.isReady()) return { ok: false, code: 'SDK_NOT_READY', send_invoked: false };
     if (typeof text !== 'string' || !text.trim() || text.length > 5000
         || !/^C2C[A-Za-z0-9_-]{1,128}$/.test(conversation_id)
         || ['C2Cyupao625e3dg36dgsh', 'C2Cyupao625e6fc83ndsa'].includes(conversation_id)
-        || conversation_id.startsWith('C2Cagent_')) return { ok: false, code: 'INVALID_TARGET' };
+        || conversation_id.startsWith('C2Cagent_')) return { ok: false, code: 'INVALID_TARGET', send_invoked: false };
+    let sendInvoked = false;
+    let plannedMessageID = '';
     try {
-      const list = (await state.chat.getConversationList()).data;
+      // SDK_READY does not mean that its separate conversation synchronization
+      // has finished. Use the same bounded wait as the read path before sending.
+      let list;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        list = (await state.chat.getConversationList()).data;
+        if (list?.isSyncCompleted === true) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      if (list?.isSyncCompleted !== true)
+        return { ok: false, code: 'SDK_SYNC_INCOMPLETE', send_invoked: false };
       let target = list?.conversationList?.find((item) => item.conversationID === conversation_id);
       // Only the internal action executor can set allow_new_peer, after creating
       // a business conversation and binding its metadata to the approved job.
@@ -105,18 +116,22 @@
         target = { type: sdk.TYPES.CONV_C2C, userProfile: { userID: conversation_id.slice(3) } };
       if (list?.isSyncCompleted !== true || !target || target.type !== sdk.TYPES.CONV_C2C
           || !target.userProfile?.userID || 'C2C' + target.userProfile.userID !== conversation_id)
-        return { ok: false, code: 'CONVERSATION_NOT_IN_SYNCED_LIST' };
+        return { ok: false, code: 'CONVERSATION_NOT_IN_SYNCED_LIST', send_invoked: false };
       const draft = state.chat.createTextMessage({ to: target.userProfile.userID,
         conversationType: sdk.TYPES.CONV_C2C, needReadReceipt: true, payload: { text } });
+      if (!draft?.ID) return { ok: false, code: 'SDK_DRAFT_INVALID', send_invoked: false };
+      plannedMessageID = draft.ID;
+      sendInvoked = true;
       const result = await state.chat.sendMessage(draft); // exactly one call, never resend
       const sent = result?.data?.message;
       if (!sent?.ID || sent.to !== target.userProfile.userID || sent.payload?.text !== text)
-        return { ok: false, code: 'SDK_SEND_RESULT_UNKNOWN' };
+        return { ok: false, code: 'SDK_SEND_RESULT_UNKNOWN', send_invoked: true, planned_message_id: plannedMessageID };
       return { ok: true, data: { message_id: sent.ID, to: sent.to,
         acknowledged: true, delivery_verified: false, is_peer_read: sent.isPeerRead === true } };
     } catch (error) {
       state.stopped = true;
-      return { ok: false, code: String(error?.code || 'SDK_SEND_RESULT_UNKNOWN') };
+      return { ok: false, code: String(error?.code || 'SDK_SEND_RESULT_UNKNOWN'),
+        send_invoked: sendInvoked, planned_message_id: plannedMessageID };
     }
   };
   globalThis.__yupaoSdkClose = async () => {

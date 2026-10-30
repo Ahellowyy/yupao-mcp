@@ -115,3 +115,20 @@ test('first-contact sender needs an explicit internal permit after business targ
   assert.equal(result.data.to, 'newpeer');
   assert.equal(calls.filter((x) => x === 'sendMessage').length, 1);
 });
+
+test('sender waits for conversation synchronization after SDK_READY before any send call', async () => {
+  const { context, calls } = await setup({ firstIncomplete: true });
+  const result = await context.__yupaoSdkSendConfirmed({ conversation_id: 'C2Cpeer', text: '经批准的原文' });
+  assert.equal(result.ok, true);
+  assert.equal(calls[0], 'getConversationList');
+  assert.equal(calls[1], 'getConversationList');
+  assert.equal(calls.filter((x) => x === 'sendMessage').length, 1);
+});
+
+test('failed target check explicitly proves that the SDK send function was not called', async () => {
+  const { context, calls } = await setup();
+  const result = await context.__yupaoSdkSendConfirmed({ conversation_id: 'C2Cunknown', text: '原文' });
+  assert.equal(result.send_invoked, false);
+  assert.equal(calls.includes('createTextMessage'), false);
+  assert.equal(calls.includes('sendMessage'), false);
+});
