@@ -16,7 +16,7 @@ def save_draft(data_dir: Path, kind: str, job: dict, text: str = ''):
     preview = {'draft_id': uuid.uuid4().hex, 'kind': kind, 'status': 'draft_only',
                'job': job, 'text': text, 'text_sha256': hashlib.sha256(text.encode()).hexdigest(),
                'created_at': time.time(), 'submitted': False, 'message_sent': False,
-               'next_step': '实际投递/发送尚未启用；需本人登录、接通写入适配并完成明确确认。'}
+               'next_step': '此草稿未绑定可执行收件人或所选简历；请生成具体操作预览，获真人确认后单次执行。'}
     folder = data_dir / 'drafts'
     folder.mkdir(parents=True, exist_ok=True)
     (folder / (preview['draft_id'] + '.json')).write_text(

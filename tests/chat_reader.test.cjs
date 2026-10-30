@@ -29,10 +29,11 @@ async function setup(options = {}) {
     async destroy() { ready = false; },
     setMessageRead() { throw Error('Must not mark read'); },
     sendMessageReadReceipt() { throw Error('Must not send read receipts'); },
-    sendMessage() { throw Error('Must not send messages'); },
+    createTextMessage(options) { calls.push('createTextMessage'); return { ...options, ID: 'new-message', to: options.to }; },
+    async sendMessage(draft) { calls.push('sendMessage'); return { data: { message: draft } }; },
   };
   const context = vm.createContext({ setTimeout, clearTimeout,
-    TencentCloudChat: { VERSION: 'test', TYPES: { MSG_TEXT: 'TIMTextElem', MSG_CUSTOM: 'TIMCustomElem' },
+    TencentCloudChat: { VERSION: 'test', TYPES: { MSG_TEXT: 'TIMTextElem', MSG_CUSTOM: 'TIMCustomElem', CONV_C2C: 'C2C' },
       EVENT: { SDK_READY: 'ready', KICKED_OUT: 'kicked' }, create: () => chat } });
   vm.runInContext(adapter, context);
   const login = await context.__yupaoSdkLogin({ appID: 1, userID: 'self', userSig: 'test-only' });
@@ -87,4 +88,30 @@ test('SDK error text is redacted and further reads stop', async () => {
   assert.equal(second.code, 'SDK_NOT_READY');
   assert.equal(JSON.stringify(first).includes('private-'), false);
   assert.equal(calls.length, 1);
+});
+
+test('internal confirmed sender calls send exactly once and does not mark messages read', async () => {
+  const { context, calls, rows } = await setup();
+  const result = await context.__yupaoSdkSendConfirmed({ conversation_id: 'C2Cpeer', text: '经批准的原文' });
+  assert.equal(result.data.message_id, 'new-message');
+  assert.equal(result.data.acknowledged, true);
+  assert.equal(result.data.delivery_verified, false);
+  assert.equal(calls.filter((x) => x === 'sendMessage').length, 1);
+  assert.equal(rows[0].unreadCount, 3);
+});
+
+test('sender refuses system assistants and unrelated conversations by default', async () => {
+  const { context, calls } = await setup();
+  for (const id of ['C2Cyupao625e3dg36dgsh', 'C2Cagent_assistant', 'C2Cunrelated']) {
+    const result = await context.__yupaoSdkSendConfirmed({ conversation_id: id, text: '原文' });
+    assert.equal(result.ok, false);
+  }
+  assert.equal(calls.includes('sendMessage'), false);
+});
+
+test('first-contact sender needs an explicit internal permit after business target verification', async () => {
+  const { context, calls } = await setup();
+  const result = await context.__yupaoSdkSendConfirmed({ conversation_id: 'C2Cnewpeer', text: '原文', allow_new_peer: true });
+  assert.equal(result.data.to, 'newpeer');
+  assert.equal(calls.filter((x) => x === 'sendMessage').length, 1);
 });

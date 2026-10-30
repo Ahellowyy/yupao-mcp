@@ -1,4 +1,4 @@
-/* First-party adapter. Only login and read operations are exposed. */
+/* First-party adapter. Reads and one internal confirmation-gated text sender. */
 (() => {
   const sdk = globalThis.TencentCloudChat;
   const state = { chat: null, stopped: false };
@@ -86,6 +86,37 @@
     } catch (error) {
       state.stopped = true;
       return { ok: false, code: String(error?.code || 'SDK_READ_FAILED') };
+    }
+  };
+  // This entry point is not exposed as an MCP tool. The Python action service
+  // calls it only after a reviewed, approved, account-bound atomic reservation.
+  globalThis.__yupaoSdkSendConfirmed = async ({ conversation_id, text, allow_new_peer = false }) => {
+    if (state.stopped || !state.chat?.isReady()) return { ok: false, code: 'SDK_NOT_READY' };
+    if (typeof text !== 'string' || !text.trim() || text.length > 5000
+        || !/^C2C[A-Za-z0-9_-]{1,128}$/.test(conversation_id)
+        || ['C2Cyupao625e3dg36dgsh', 'C2Cyupao625e6fc83ndsa'].includes(conversation_id)
+        || conversation_id.startsWith('C2Cagent_')) return { ok: false, code: 'INVALID_TARGET' };
+    try {
+      const list = (await state.chat.getConversationList()).data;
+      let target = list?.conversationList?.find((item) => item.conversationID === conversation_id);
+      // Only the internal action executor can set allow_new_peer, after creating
+      // a business conversation and binding its metadata to the approved job.
+      if (!target && allow_new_peer === true)
+        target = { type: sdk.TYPES.CONV_C2C, userProfile: { userID: conversation_id.slice(3) } };
+      if (list?.isSyncCompleted !== true || !target || target.type !== sdk.TYPES.CONV_C2C
+          || !target.userProfile?.userID || 'C2C' + target.userProfile.userID !== conversation_id)
+        return { ok: false, code: 'CONVERSATION_NOT_IN_SYNCED_LIST' };
+      const draft = state.chat.createTextMessage({ to: target.userProfile.userID,
+        conversationType: sdk.TYPES.CONV_C2C, needReadReceipt: true, payload: { text } });
+      const result = await state.chat.sendMessage(draft); // exactly one call, never resend
+      const sent = result?.data?.message;
+      if (!sent?.ID || sent.to !== target.userProfile.userID || sent.payload?.text !== text)
+        return { ok: false, code: 'SDK_SEND_RESULT_UNKNOWN' };
+      return { ok: true, data: { message_id: sent.ID, to: sent.to,
+        acknowledged: true, delivery_verified: false, is_peer_read: sent.isPeerRead === true } };
+    } catch (error) {
+      state.stopped = true;
+      return { ok: false, code: String(error?.code || 'SDK_SEND_RESULT_UNKNOWN') };
     }
   };
   globalThis.__yupaoSdkClose = async () => {
