@@ -5,6 +5,7 @@ import uuid
 
 from .client import CITY_IDS, YupaoError
 from .store import digest
+from .activity import HR_ACTIVITY_FILTERS, check_activity
 
 DEGREES = {'初中': 0, '高中': 1, '中专': 1, '大专': 2, '本科': 3, '硕士': 4, '博士': 5}
 
@@ -65,6 +66,15 @@ def check_filters(job, rules):
             unknown.append('经验要求未知')
         elif years and min(years) > rules['experience_years']:
             failures.append('最低经验要求高于本人经验')
+    activity_rule = rules.get('hr_activity', 'any')
+    if activity_rule != 'any':
+        activity = job.get('hr_activity')
+        state = check_activity(activity, activity_rule)
+        if state == 'unknown':
+            unknown.append('HR 活跃状态缺失或标签无法识别，需核实')
+        elif state == 'excluded':
+            failures.append('HR 活跃标签未满足' + HR_ACTIVITY_FILTERS[activity_rule]
+                            + '：' + activity['activity_text'])
     return {'status': 'excluded' if failures else 'review' if unknown else 'matched',
             'reasons': failures, 'unknown': unknown}
 
@@ -74,7 +84,8 @@ class Workspace:
         self.store, self.client = store, client
 
     def save_preset(self, name, keywords, city='上海', page_size=5, required_terms=None,
-                    excluded_terms=None, salary_min=None, salary_max=None, education='', experience_years=None):
+                    excluded_terms=None, salary_min=None, salary_max=None, education='', experience_years=None,
+                    hr_activity='any'):
         name, keywords = text(name, '预设名', 60), text(keywords, '搜索词')
         if city not in CITY_IDS or type(page_size) is not int or not 1 <= page_size <= 10:
             raise YupaoError('INVALID_ARGUMENT', '城市须受支持，预设每页数量为 1–10')
@@ -86,25 +97,41 @@ class Workspace:
             raise YupaoError('INVALID_ARGUMENT', '最低薪资不能高于最高薪资')
         if education and education not in DEGREES:
             raise YupaoError('INVALID_ARGUMENT', '学历须为：' + '、'.join(DEGREES))
+        if not isinstance(hr_activity, str) or hr_activity not in HR_ACTIVITY_FILTERS:
+            raise YupaoError('INVALID_ARGUMENT', 'hr_activity 须为：' + '、'.join(HR_ACTIVITY_FILTERS))
         return self.store.put('preset', name, {'name': name, 'keywords': keywords, 'city': city,
             'page_size': page_size, 'rules': {'required_terms': terms(required_terms or []),
             'excluded_terms': terms(excluded_terms or []), 'salary_min': salary_min, 'salary_max': salary_max,
-            'education': education, 'experience_years': experience_years},
+            'education': education, 'experience_years': experience_years, 'hr_activity': hr_activity},
             'filter_execution': 'local_full_jd', 'salary_unit': 'CNY/month', 'updated_at': time.time()})
 
     def search_preset(self, name, page=1):
         preset = self.store.get('preset', name)
         result = self.client.search(preset['keywords'], preset['city'], page, preset['page_size'])
-        matched, review, excluded = [], [], []
+        matched, review, excluded, activity_requests = [], [], [], 0
         for item in result['jobs']:
             detail = self.client.detail(item['job_biz_id'])
+            if preset['rules'].get('hr_activity', 'any') != 'any':
+                # Skip extra authenticated reads when another condition already excludes the job.
+                other_rules = {**preset['rules'], 'hr_activity': 'any'}
+                if check_filters(detail, other_rules)['status'] != 'excluded':
+                    try:
+                        activity_requests += 1
+                        detail['hr_activity'] = self.client.get_hr_activity(item['job_biz_id'])
+                    except YupaoError as exc:
+                        if exc.code not in ('LOGIN_REQUIRED', 'SCHEMA_CHANGED'):
+                            # Platform refusals, rate limits, bad sessions and transport failures stop.
+                            raise
+                        detail['hr_activity'] = {'available': False, 'activity_text': '',
+                            'error_code': exc.code, 'source': 'yupao_authenticated_job_detail'}
             decision = check_filters(detail, preset['rules'])
             row = {**detail, 'filter_result': decision}
             {'matched': matched, 'review': review, 'excluded': excluded}[decision['status']].append(row)
         return {'preset': preset['name'], 'page': page, 'jobs': matched, 'review_jobs': review,
                 'excluded_jobs': excluded, 'search_returned_count': result['returned_count'],
-                'detail_requests': len(result['jobs']), 'filter_execution': 'local_full_jd',
-                'notice': '城市、关键词由平台搜索；薪资等条件在本机按返回资料筛选，未知条件单列待核实。'}
+                'detail_requests': len(result['jobs']), 'hr_activity_requests': activity_requests,
+                'filter_execution': 'local_full_jd',
+                'notice': '城市、关键词由平台搜索；薪资及HR活跃标签等条件在本机筛选。活跃条件启用时按需额外读取登录态岗位资料；标签不是精确最后在线时间，未知条件单列待核实。'}
 
     def save_job(self, job_biz_id, tags=None, note=''):
         job = self.client.detail(job_biz_id)

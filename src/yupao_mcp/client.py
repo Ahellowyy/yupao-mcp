@@ -230,6 +230,19 @@ class YupaoClient:
         return {'authenticated': True, 'status': 'profile_api_verified',
                 'message': '仅核验账号接口，未执行投递或发送'}
 
+    def get_hr_activity(self, job_biz_id):
+        """Read the job publisher's current activity label, without contact writes."""
+        if not isinstance(job_biz_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{3,100}', job_biz_id):
+            raise YupaoError('INVALID_ARGUMENT', '职位编号格式不正确')
+        data = self.post('detail_authenticated', {'jobBizId': job_biz_id})
+        if not isinstance(data, dict) or data.get('jobBizId') != job_biz_id:
+            raise YupaoError('SCHEMA_CHANGED', '活跃资料对应的岗位身份不匹配')
+        label = plain(data.get('activeDate'))
+        return {'hr_name': plain(data.get('userName')), 'activity_text': label,
+                'is_active': data.get('isActive') if type(data.get('isActive')) is bool else None,
+                'checked_at': time.time(), 'source': 'yupao_authenticated_job_detail',
+                'available': bool(label)}
+
     def account_key(self):
         import hashlib
         data = self.post('profile', {})

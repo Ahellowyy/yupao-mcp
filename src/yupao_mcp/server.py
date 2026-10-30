@@ -15,6 +15,7 @@ from .chat import ChatReader
 from .store import Store
 from .workspace import Workspace
 from .actions import ActionService, writes_enabled, review_text
+from .activity import HrActivityFilter, HR_ACTIVITY_FILTERS
 
 
 @asynccontextmanager
@@ -64,13 +65,14 @@ def yupao_capabilities() -> dict:
     return {'version': __version__, 'transport': 'stdio', 'cities': list(CITY_IDS),
             'search': 'live_api_verified', 'job_detail': 'live_api_verified',
             'verified_city': '上海', 'application': 'ordinary_attachment_confirmed_execution_unverified_live',
-            'message': 'single_confirmed_sdk_execution_unverified_live', 'writes_enabled': writes_enabled(),
+            'message': 'single_confirmed_sdk_text_live_history_verified', 'writes_enabled': writes_enabled(),
             'session_file_configured': bool(client.session_file),
             'resume_attachments': 'authenticated_read',
-            'chat_resume_send': 'single_confirmed_business_api_unverified_live',
+            'chat_resume_send': 'single_confirmed_business_api_live_card_verified',
             'messaging_session': 'credential_availability_check_only',
             'conversations': 'optional_chat_sdk_read', 'chat_history': 'optional_chat_sdk_read',
             'presets': True, 'shortlist': True, 'matching': 'host_ai_with_evidence_validation',
+            'hr_activity_filters': HR_ACTIVITY_FILTERS,
             'human_confirmation_required': True,
             'im_transport_discovered': 'Tencent Cloud Chat SDK; authenticated UserSig required'}
 
@@ -154,10 +156,11 @@ async def yupao_prepare_message(job_biz_id: str, text: str, conversation_id: str
 def yupao_save_preset(name: str, keywords: str, city: str = '上海', page_size: int = 5,
                       required_terms: list[str] | None = None, excluded_terms: list[str] | None = None,
                       salary_min: float | None = None, salary_max: float | None = None,
-                      education: str = '', experience_years: float | None = None) -> dict:
-    """保存搜索条件；薪资为元/月，学历与经验表示本人条件。平台未核实的过滤在本机执行。"""
+                      education: str = '', experience_years: float | None = None,
+                      hr_activity: HrActivityFilter = 'any') -> dict:
+    """保存搜索条件，薪资元/月，学历经验为本人条件。hr_activity: any/just_now/today/within_3_days/within_7_days/within_30_days。本机筛选，未知单列。"""
     return call(workspace.save_preset, name, keywords, city, page_size, required_terms,
-                excluded_terms, salary_min, salary_max, education, experience_years)
+                excluded_terms, salary_min, salary_max, education, experience_years, hr_activity)
 
 
 @mcp.tool(annotations=LOCAL_READ)

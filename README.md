@@ -18,7 +18,7 @@
 | `yupao_prepare_resume` | 预览指定附件发送；已有会话核对权限和历史，`start_conversation=true` 可预览首次开聊后发简历；须真人确认 |
 | `yupao_prepare_message` | 预览已有 HR 会话消息，或以 `start_conversation=true` 预览免费首次开聊；准备阶段不发送 |
 | `yupao_save_preset` / `yupao_list_presets` / `yupao_remove_preset` | 管理本机搜索预设 |
-| `yupao_search_preset` | 平台搜索后读取完整 JD，在本机筛选，未知条件单列 |
+| `yupao_search_preset` | 平台搜索后读取完整 JD，在本机按条件和 HR 活跃标签筛选，未知条件单列 |
 | `yupao_save_job` / `yupao_list_saved_jobs` | 完整 JD 候选池，按岗位 ID 去重 |
 | `yupao_annotate_job` / `yupao_remove_saved_job` | 管理本机标签、备注及候选状态 |
 | `yupao_prepare_match` / `yupao_record_match` / `yupao_list_matches` | 宿主 AI 匹配、逐项引文校验、排序与 JD 版本提示 |
@@ -38,6 +38,21 @@
 例如保存预设：`name="上海 Agent"`、`keywords="大模型"`、`city="上海"`、`required_terms=["Agent"]`。还可提供 `excluded_terms`、`salary_min`、`salary_max`、`education`、`experience_years`；学历和经验表示本人条件，不会自动推断。
 
 只有城市和搜索词直接传给已核验的鱼泡搜索接口。其余条件在本机对返回的完整 JD、标签进行筛选，不冒充平台服务端筛选。薪资按明确月薪区间与预期是否相交判断，日薪、年薪和面议保持未知。结果分为 `jobs`、`review_jobs`、`excluded_jobs`。预设每页 1–10 条，最多补查该页数量的详情，不自动翻页。
+
+0.7.0 新增 `hr_activity` 活跃条件，可与上述条件同时保存：
+
+| 参数值 | 筛选条件 |
+| --- | --- |
+| `any` | 不限，默认值；不额外查询活跃资料 |
+| `just_now` | 平台标注“刚刚活跃” |
+| `today` | 平台标注当天活跃，或刚刚活跃 |
+| `within_3_days` | 平台标注的活跃范围不超过 3 天 |
+| `within_7_days` | 平台标注的活跃范围不超过 7 天 |
+| `within_30_days` | 平台标注的活跃范围不超过 30 天 |
+
+例如 `yupao_save_preset(name="上海 Agent · HR 3天内活跃", keywords="Agent", city="上海", required_terms=["Agent"], hr_activity="within_3_days")`，再调用 `yupao_search_preset`。启用后，对未被其他条件排除的岗位额外读取一次登录态岗位资料；只返回发布者姓名、`activeDate` 原文、原始布尔标志、读取时间及来源，不发起沟通。结果中的 `hr_activity` 保留这些依据，`hr_activity_requests` 表示尝试读取次数，旧预设默认不限。
+
+这是按平台标签范围判断，不推算精确最后在线时间：例如“3天内活跃”可通过 7 天条件，“昨日活跃”或“前天活跃”可通过 3 天条件，“4个月内活跃”不通过 3 天条件；后者不证明 HR 实际已离线四个月。“1天内”不能保证是当天，“1个月内”不能保证不超过 30 天，因此不通过相应更窄的条件。`isActive` 布尔值不单独作为活跃时间依据。缺失标签、未知标签、“当前未在线”、缺少登录或活跃资料结构变化时，其他条件符合的岗位进入 `review_jobs`；平台拒绝、限流或网络错误仍立即停止，不重试。
 
 候选池保存在 `YUPAO_DATA_DIR/workspace.sqlite3`（默认 `.local`），保留完整 JD、标签、备注、抓取时间及摘要。重复保存按 `job_biz_id` 更新，保留原有标签与备注。状态为 `candidate`、`priority`、`excluded`、`archived`，这些是本机整理状态，不代表平台已经投递。
 
@@ -126,7 +141,7 @@ $env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
 
 会话文件缺失、身份不符或服务端拒绝时停止，不能将“文件存在”当作登录有效。附件工具只返回本人文件的必要元数据，不下载简历、不返回可访问文件的地址。
 
-真实写入默认关闭。当前已提供受限的单条执行器；普通首次开聊和接收方回查已在真实账号验证，项目正文首次试发未取得可确认结果，不能记为成功，附件投递也尚未实投验证。网页源码确认与离线测试不能代替账号实测。网页流程包括：
+真实写入默认关闭。当前已提供受限的单条执行器；普通首次开聊和接收方回查已在真实账号验证，项目介绍长文早期试发未取得可确认结果或收到内容审核拒绝；后续指定附件及补充短文经逐次批准已完成实发和独立回读，岗位页直接附件投递仍未实投验证。网页源码确认与离线测试不能代替账号实测。网页流程包括：
 
 - 投递/发起沟通：业务前置检查、`/job/v3/contact/job/im/call`、`/reach/v2/im/chat/init` 等路径；部分岗位使用 `/resume-delivery/v1/delivery/submit`。这些是不同岗位类型的路径，不能一律混用。
 - 文本消息：网页使用腾讯云 Chat SDK，`createTextMessage` 后调用 `sendMessage`，并请求已读回执。本人登录后还需要通过鱼泡获取 SDK 登录资料和 UserSig；不能使用管理员 REST 密钥替代。
@@ -174,10 +189,10 @@ $env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
 | 会话及聊天记录 | Chat SDK `getConversationList`、`getMessageList` | 已完成 SDK 登录、同步及 MCP 联网读取验证；未发送已读回执 |
 | HR 对应的岗位资料 | `POST /reach/v2/im/chat/pcList` | 已验证非空会话的姓名、公司、岗位、薪资和业务会话关联 |
 | 业务会话接收方核对 | `POST /reach/v2/im/chat/detailV2` → `pcList` | 已用现有会话验证接收方和岗位身份；不会据此自动发送 |
-| 发送文本 | Chat SDK `createTextMessage` → `sendMessage` | 已实现确认、预约、单次发送及历史核对；仅离线测试，真实发送待明确批准 |
+| 发送文本 | Chat SDK `createTextMessage` → `sendMessage` | 已经明确批准实发补充短文，并独立回读核对消息 ID、正文和接收人；不代表任意正文都能通过审核 |
 | 普通首次沟通 | `im/preCheck` → `im/call` → `chat/init` | 已完成真实开聊及业务会话、岗位接收方核对；平台自动招呼不等于自定义正文已发出 |
 | 普通社招附件投递 | 前置检查 → 联系 → `chat/init`，`postType=1` | 已实现权限检查与回读；真实投递待明确批准 |
-| 聊天中发送附件简历 | `POST /reach/v2/im/exchange/applyExchange` | 已接入单次确认、权限及历史防重、SDK 卡片回读；自动执行尚未实发验证 |
+| 聊天中发送附件简历 | `POST /reach/v2/im/exchange/applyExchange` | 已明确批准实发，包含首次开聊后发送指定附件，并独立回查相同文件 ID 的成功卡片；不代表已读或下载 |
 | 处理对方的附件简历交换请求 | `POST /reach/v2/im/exchange/handleExchange` | 源码确认；尚未发送实测 |
 | 面试邀请后补发附件 | `POST /reach/v2/im/invite/sendResumeFile` | 源码确认；只适用于对应邀请流程 |
 | 某些岗位类型的正式投递 | `/resume-delivery/v1/delivery/preSubmit`、`requirement`、`submit` | 源码确认；尚未投递实测 |
@@ -205,6 +220,8 @@ node --test tests/chat_reader.test.cjs
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_stdio.py
 # 需先明确授权并配置 YUPAO_SESSION_FILE；仅核验账号、简历列表和 IM 资料：
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_authenticated.py
+# 同样需要已授权登录；真实搜索及HR活跃条件筛选，不投递或开聊：
+.\.venv\Scripts\python.exe -X utf8 tests/smoke_activity.py
 # 已安装 chat 可选依赖、下载 SDK 并明确授权读取当前账号的会话后：
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_chat.py
 # 本人明确指定项目/简历文本文件，只读搜索、本机存储与匹配材料准备：
@@ -212,7 +229,7 @@ $env:YUPAO_MATCH_TEXT_FILE = "C:\path\to\private-profile.txt"
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_workflows.py
 ```
 
-2026-10-30：MCP 提供 24 个工具，127 项 Python 测试、11 项 JavaScript 测试通过。真实只读验证覆盖搜索、完整 JD、账号、附件、SDK 会话与消息、本地预设筛选、候选池、宿主 AI 分析保存和消息预览；写入关闭时执行工具确实返回拒绝。经明确批准的首次真实尝试验证了开聊及接收方回查，但正文发送结果仍未确认；后续经单独批准的正文试发明确收到内容审核拒绝 80001，独立完整历史回查未发现正文或计划消息 ID；拒绝已记录，不继续重试。新增聊天附件功能已通过 MCP 真实只读预览验证：能识别既有附件卡片并阻止重复发送，关闭写入时执行工具返回 WRITES_DISABLED；未进行自动附件实发。附件投递未实测。离线回归另覆盖 SDK_READY 之后的会话同步等待和发送调用阶段记录。
+2026-10-30：MCP 提供 24 个工具，172 项 Python 测试、11 项 JavaScript 测试通过。真实只读验证覆盖搜索、完整 JD、账号、附件、SDK 会话与消息、本地预设筛选、候选池、宿主 AI 分析保存和消息预览；写入关闭时执行工具确实返回拒绝。经明确批准的首次真实尝试验证了开聊及接收方回查，但正文发送结果仍未确认；后续经单独批准的正文试发明确收到内容审核拒绝 80001，独立完整历史回查未发现正文或计划消息 ID；拒绝已记录，不继续重试。新增聊天附件功能已通过 MCP 真实只读预览验证：能识别既有附件卡片并阻止重复发送，关闭写入时执行工具返回 WRITES_DISABLED；后续另经逐次明确批准，已完成首次开聊后发送指定附件，以及补发项目演示说明短文，两者均独立核对消息或文件 ID、接收方和成功状态；这不等于对方已读或下载。岗位页直接附件投递仍未实测。离线回归另覆盖 SDK_READY 之后的会话同步等待和发送调用阶段记录。
 
 联网验证脚本会将本机结果保存到 `.local/live-smoke-result.json`、`.local/authenticated-mcp-smoke.json`、`.local/chat-mcp-result.json`。会话名单与消息仅保存在本机，不随仓库分发。账号文件、草稿、虚拟环境和缓存均在 `.gitignore` 中排除。
 
