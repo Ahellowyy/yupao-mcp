@@ -1,7 +1,6 @@
 """Bounded read-only HTTP adapter. No arbitrary URL or write endpoint is exposed."""
 from __future__ import annotations
 
-import html
 from html.parser import HTMLParser
 import json
 import os
@@ -14,13 +13,19 @@ import time
 import httpx
 
 from .signing import sign_request
+from . import __version__
 
 ORIGIN = 'https://yupao-prod.yupaowang.com'
 READ_ENDPOINTS = {
     'search': '/job/v2/search/job/search',
     'detail': '/job/v3/detail/infoSeo',
     'profile': '/account/v1/userBase/getLoginUserInfo',
+    'resume_attachments': '/resume/v3/attach/myAttach',
+    'chat_resume_attachments': '/resume/v3/attach/myImAttach',
+    'im_credentials': '/reach/v2/im/account/getImToken',
 }
+AUTHENTICATED_READS = frozenset({'profile', 'resume_attachments',
+                               'chat_resume_attachments', 'im_credentials'})
 CITY_IDS = {'全国': 1, '北京': 2, '上海': 25, '广州': 76, '深圳': 77,
             '杭州': 383, '成都': 322, '南京': 220, '苏州': 221, '武汉': 180}
 
@@ -106,14 +111,21 @@ class YupaoClient:
             data = json.loads(Path(self.session_file).read_text(encoding='utf-8'))
         except (OSError, ValueError):
             raise YupaoError('SESSION_FILE_INVALID', '本机登录文件不可读取或格式不正确') from None
+        if not isinstance(data, dict):
+            raise YupaoError('SESSION_FILE_INVALID', '登录文件须为 JSON 对象')
         token = data.get('token')
         if not isinstance(token, str) or not token or len(token) > 8192 or '\n' in token or '\r' in token:
             raise YupaoError('SESSION_FILE_INVALID', '登录文件缺少有效 token')
-        return {'token': token, 'userrole': str(data.get('userrole', '1'))}
+        if str(data.get('userrole', '2')) != '2':
+            raise YupaoError('JOBSEEKER_ROLE_REQUIRED', '此项目仅支持本人求职者身份（userrole=2）')
+        return {'token': token, 'userrole': '2'}
 
     def post(self, operation, body):
         if operation not in READ_ENDPOINTS:
             raise YupaoError('OPERATION_NOT_ALLOWED', '仅允许已登记的只读接口')
+        session = self._session()
+        if operation in AUTHENTICATED_READS and not session:
+            raise YupaoError('LOGIN_REQUIRED', '该能力需要配置本人求职者登录文件')
         if self.blocked_reason:
             raise YupaoError('REQUESTS_STOPPED', self.blocked_reason)
         with self.lock:
@@ -122,11 +134,11 @@ class YupaoClient:
             time.sleep(max(0, self.interval - (time.monotonic() - self.last_request)))
             ts, nonce = str(int(time.time() * 1000)), str(secrets.randbelow(1000000))
             headers = {'Origin': 'https://www.yupao.com', 'Referer': 'https://www.yupao.com/',
-                       'User-Agent': 'wyy-yupao-mcp/0.1', 'reqsource': 'YPZP', 'business': 'YPZP',
+                       'User-Agent': f'wyy-yupao-mcp/{__version__}', 'reqsource': 'YPZP', 'business': 'YPZP',
                        'packageversion': '9.40.0', 'packagename': 'yp.pc', 'runtime': 'PC',
                        'hybird': 'NO', 'signVersion': '1', 'request-source': 'java',
                        'timestamp': ts, 'nonce': nonce, 'sign': sign_request(body, ts, nonce)}
-            headers.update(self._session())
+            headers.update(session)
             try:
                 response = self.http.post(ORIGIN + READ_ENDPOINTS[operation], json=body, headers=headers)
                 self.last_request = time.monotonic()
@@ -142,7 +154,9 @@ class YupaoClient:
                 message = str(data.get('message') or data.get('msg') or '接口未返回成功') if isinstance(data, dict) else '接口格式异常'
                 if code in (401, 403, 429, 1610002) or any(x in message for x in ('验证', '频繁', '受限', '异常行为')):
                     self.blocked_reason = '服务端要求验证或限制请求，请在官方页面处理后再恢复'
-                raise YupaoError(code, message)
+                # Authenticated error text may contain account data; do not pass it to MCP.
+                raise YupaoError(code, '账号接口未返回成功，请在官方页面核对登录和权限'
+                                 if operation in AUTHENTICATED_READS else message)
             return data.get('data')
 
     def search(self, keywords, city='上海', page=1, page_size=10):
@@ -175,5 +189,38 @@ class YupaoClient:
             return {'authenticated': False, 'status': 'public_read_only',
                     'message': '未配置登录文件；公开岗位搜索与详情可使用'}
         data = self.post('profile', {})
-        return {'authenticated': bool(data), 'status': 'profile_api_verified' if data else 'unverified',
+        if not isinstance(data, dict) or not data.get('userId'):
+            raise YupaoError('SCHEMA_CHANGED', '账号资料缺少有效用户身份')
+        return {'authenticated': True, 'status': 'profile_api_verified',
                 'message': '仅核验账号接口，未执行投递或发送'}
+
+    def list_resume_attachments(self, for_chat=False):
+        if not isinstance(for_chat, bool):
+            raise YupaoError('INVALID_ARGUMENT', 'for_chat 须为布尔值')
+        operation = 'chat_resume_attachments' if for_chat else 'resume_attachments'
+        data = self.post(operation, {})
+        if not isinstance(data, dict) or not isinstance(data.get('fileList'), list):
+            raise YupaoError('SCHEMA_CHANGED', '附件简历列表结构改变')
+        files = []
+        for item in data['fileList']:
+            if not isinstance(item, dict) or not isinstance(item.get('uuid'), str):
+                raise YupaoError('SCHEMA_CHANGED', '附件简历身份结构改变')
+            files.append({'resume_file_id': item['uuid'], 'name': plain(item.get('fileName')),
+                          'file_type': item.get('fileType'), 'file_size': item.get('fileSize'),
+                          'updated_at': item.get('userUpdatedAt'),
+                          'check_status': item.get('checkStatus'),
+                          'finish_status': item.get('finishStatus'),
+                          'rejected_by_platform': item.get('checkStatus') in (3, '3')})
+        return {'purpose': 'chat' if for_chat else 'application', 'files': files,
+                'count': len(files), 'download_urls_returned': False,
+                'sent': False, 'notice': '仅列出本人附件元数据；未审核不代表可发送，实际发送前须再次检查。'}
+
+    def check_messaging_session(self):
+        data = self.post('im_credentials', {})
+        if (not isinstance(data, dict) or not isinstance(data.get('imToken'), str)
+                or not data['imToken'] or not data.get('imAccount')):
+            raise YupaoError('SCHEMA_CHANGED', 'IM 登录资料结构改变或缺失')
+        return {'credentials_available': True, 'transport': 'Tencent Cloud Chat SDK',
+                'sdk_login_verified': False, 'send_verified': False,
+                'credentials_returned': False,
+                'message': '鱼泡已返回 IM 登录资料；未登录 SDK，未发送消息。'}

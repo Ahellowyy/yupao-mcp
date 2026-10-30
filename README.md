@@ -10,6 +10,8 @@
 | `yupao_search_jobs` | 按关键词、城市、页码实时请求岗位搜索接口 |
 | `yupao_get_job_detail` | 读取完整 JD，返回职位、公司、标签、公开链接及描述 |
 | `yupao_check_session` | 检查明确配置的本机登录文件；没有登录文件时返回公开只读模式 |
+| `yupao_list_resume_attachments` | 读取本人已有简历的 ID、文件名和审核状态；区分投递与聊天附件，不返回下载地址 |
+| `yupao_check_messaging_session` | 验证鱼泡能否返回 IM 登录资料；不返回凭证，不登录 SDK，不发送消息 |
 | `yupao_prepare_application` | 保存本地投递草稿；不投递、不上传简历 |
 | `yupao_prepare_message` | 保存本地消息草稿；不创建远端聊天、不发送消息 |
 
@@ -49,7 +51,16 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 
 ## 登录与写入的后续边界
 
-可以通过 `YUPAO_SESSION_FILE` 指定本人在本机保存的登录 JSON 文件，字段为 `token` 和 `userrole`。不要将该文件提交仓库或复制到聊天。程序不会自行扫描浏览器 Cookie、密码库或其他应用配置。
+可以通过 `YUPAO_SESSION_FILE` 指定本人在本机保存的登录 JSON 文件，字段为 `token` 和 `userrole`。求职者 `userrole` 为 `2`，招聘方为 `1`；本项目拒绝以招聘方身份调用。不要将该文件提交仓库或复制到聊天。程序不会自行扫描浏览器 Cookie、密码库或其他应用配置；导入已有会话须由本人明确授权。
+
+PowerShell 接入本人已授权的本地会话：
+
+```powershell
+$env:YUPAO_SESSION_FILE = (Resolve-Path .local/session.json).Path
+.\.venv\Scripts\python.exe -m yupao_mcp
+```
+
+会话文件缺失、身份不符或服务端拒绝时停止，不能将“文件存在”当作登录有效。附件工具只返回本人文件的必要元数据，不下载简历、不返回可访问文件的地址。
 
 目前实际投递和消息发送没有启用，也没有暴露可执行远端写入的 MCP 工具。网页源码中已确认的流程：
 
@@ -57,17 +68,48 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 - 文本消息：网页使用腾讯云 Chat SDK，`createTextMessage` 后调用 `sendMessage`，并请求已读回执。本人登录后还需要通过鱼泡获取 SDK 登录资料和 UserSig；不能使用管理员 REST 密钥替代。
 - 开启实际写入前，需要核对本人登录状态、岗位类型、简历选择和接收方，完成明确授权的单条试验，并增加持久化去重、业务回执及历史回查。当前只创建本地草稿，不把草稿当作投递成功。
 
+### 消息与简历流程核对
+
+下表的“源码确认”表示在鱼泡公开前端中核对过调用关系和参数，并不表示已对真实 HR 执行过。鉴权只读接口已另行通过本人授权的求职者会话验证。
+
+| 能力 | 接口或 SDK 流程 | 当前验证范围 |
+| --- | --- | --- |
+| 本人投递附件列表 | `POST /resume/v3/attach/myAttach` | 已联网验证并接入 MCP；读取 `data.fileList` |
+| 本人聊天附件列表 | `POST /resume/v3/attach/myImAttach` | 已联网验证并接入 MCP；读取 `data.fileList` |
+| IM 登录资料 | `POST /reach/v2/im/account/getImToken` | 已联网验证有 `imAccount`、`imToken`，仅返回可用状态 |
+| 会话及聊天记录 | Chat SDK `getConversationList`、`getMessageList` | 已确认网页使用；尚未接入 SDK |
+| 发送文本 | Chat SDK `createTextMessage` → `sendMessage` | 源码确认；尚未发送实测 |
+| 聊天中申请交换附件简历 | `POST /reach/v2/im/exchange/applyExchange` | 源码确认；尚未发送实测 |
+| 处理对方的附件简历交换请求 | `POST /reach/v2/im/exchange/handleExchange` | 源码确认；尚未发送实测 |
+| 面试邀请后补发附件 | `POST /reach/v2/im/invite/sendResumeFile` | 源码确认；只适用于对应邀请流程 |
+| 某些岗位类型的正式投递 | `/resume-delivery/v1/delivery/preSubmit`、`requirement`、`submit` | 源码确认；尚未投递实测 |
+| 上传新的附件简历 | 上传组件 → `/resume/v3/attach/publishAnalysis` 或 `addSync` 等 | 尚未核对完整上传凭证、存储与绑定链路；未实现 |
+
+调用约束：
+
+- IM 登录：将鱼泡返回的 `imAccount` 用作 SDK `userID`，`imToken` 用作 `userSig`；获取资料不等于 SDK 登录成功，必须等待 SDK 就绪。生产环境 SDKAppID 来源为公开前端的环境配置，不能使用开发者自己新建的 IM 应用替代。
+- 文本：网页使用 C2C 会话，接收方为对方的 IM 账号，并设置 `needReadReceipt=true`。成功要核对 SDK 返回的消息 ID、接收方及内容，并回查记录；发送受理、送达、已读是不同状态。
+- 主动交换附件：参数为 `{conversationId, exchangeType: "EXCHANGE_RESUME_FILE", extData: {resumeFileId}}`。这里的业务 `conversationId` 不能直接拿腾讯云的 `conversationID` 或岗位 ID 替代。需要确认所选文件属于本人，并核对平台审核状态和该会话的业务权限。
+- 接受附件请求：使用 `exchangeMsgId`、`agree`、`exchangeType` 和所选附件，不能当作主动发送流程调用。
+- 面试邀请：`{inviteId, fileId}` 只适用于对应邀请，不是通用发简历接口。
+- 校招等投递分支的源码参数包括 `jobIds`、`resumeSubUuid`、`infoKind`、`type`、`infoId`。必须按真实岗位类型走相应分支，不能只传一个 job ID。
+- `chat/init`、`im/call`、投递预检查以及交换简历均不在当前只读工具的允许列表中；不能为了探测参数而对真实招聘方执行。
+
+腾讯云 SDK 官方参考：[消息发送](https://cloud.tencent.com/document/product/269/75316)、[客户端 API](https://cloud.tencent.com/document/product/269/37411)。SDK 支持通用文件消息，不代表鱼泡接受用通用文件消息代替业务简历交换流程。
+
 ## 验证
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q --basetemp .tmp/pytest-run
 # 显式联网，只读搜索、详情及本地草稿，不投递或发送：
 .\.venv\Scripts\python.exe -X utf8 tests/smoke_stdio.py
+# 需先明确授权并配置 YUPAO_SESSION_FILE；仅核验账号、简历列表和 IM 资料：
+.\.venv\Scripts\python.exe -X utf8 tests/smoke_authenticated.py
 ```
 
-2026-10-30 实测：9 项单元测试通过；MCP 协议调用返回 3 条上海“大模型”相关结果，读取到 `agent/大模型算法工程师` 的 468 字 JD，并成功生成本地草稿。实际投递 0 次，实际发送 0 条。
+2026-10-30 实测：24 项单元测试通过。公开只读 MCP 已返回上海“大模型”搜索结果及完整 JD，并成功生成本地草稿；鉴权只读 MCP 发现 8 个工具，确认账号接口、两类附件列表和 IM 登录资料接口可用。真实 SDK 登录、投递、消息发送、简历分享均未实测；实际投递 0 次，实际发送 0 条。
 
-联网验证脚本会将本机结果保存到 `.local/live-smoke-result.json`，该文件不随仓库分发。账号文件、草稿、虚拟环境和缓存均在 `.gitignore` 中排除。
+联网验证脚本会将本机结果保存到 `.local/live-smoke-result.json`、`.local/authenticated-mcp-smoke.json`，这些文件不随仓库分发。账号文件、草稿、虚拟环境和缓存均在 `.gitignore` 中排除。
 
 ## 接口来源与限制
 
