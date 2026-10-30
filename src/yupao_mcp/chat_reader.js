@@ -5,8 +5,23 @@
   const clip = (value, limit = 500) => typeof value === 'string' ? value.slice(0, limit) : '';
   const message = (item) => {
     let customType = null;
+    let resumeCard = null;
     if (item.type === sdk.TYPES.MSG_CUSTOM && typeof item.payload?.data === 'string') {
-      try { customType = JSON.parse(item.payload.data).type ?? null; } catch { /* no raw payload */ }
+      try {
+        const custom = JSON.parse(item.payload.data);
+        customType = custom?.type ?? null;
+        if (String(customType) === '710.1' && custom.content && typeof custom.content === 'object') {
+          const content = custom.content;
+          const id = (value, limit = 200) => typeof value === 'string'
+            && new RegExp('^[A-Za-z0-9_:\\-]{1,' + limit + '}$').test(value) ? value : '';
+          resumeCard = {
+            sub_type: ['1', '2', '3'].includes(String(content.subType)) ? String(content.subType) : '',
+            resume_file_id: id(content.fileInfo?.fileId),
+            file_name: clip(content.fileInfo?.fileName, 200),
+            exchange_message_id: id(content.exchangeMsgId, 500),
+          };
+        }
+      } catch { /* no raw payload */ }
     }
     return {
       message_id: clip(item.ID, 200), conversation_id: clip(item.conversationID, 200),
@@ -14,6 +29,7 @@
       time: item.time ?? null, sequence: item.sequence ?? null, type: clip(item.type, 64),
       text: item.type === sdk.TYPES.MSG_TEXT ? clip(item.payload?.text, 5000) : '',
       custom_type: typeof customType === 'number' || typeof customType === 'string' ? customType : null,
+      resume_card: resumeCard,
       status: clip(item.status, 32), is_revoked: item.isRevoked === true,
       is_peer_read: typeof item.isPeerRead === 'boolean' ? item.isPeerRead : null,
     };

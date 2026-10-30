@@ -90,6 +90,25 @@ test('SDK error text is redacted and further reads stop', async () => {
   assert.equal(calls.length, 1);
 });
 
+test('resume cards expose only correlation metadata without URLs or arbitrary nested fields', async () => {
+  const { context } = await setup({ messages: [
+    { ID: 'resume-card', conversationID: 'C2Cpeer', type: 'TIMCustomElem', payload: {
+      data: JSON.stringify({ type: '710.1', content: { subType: '3', exchangeMsgId: 'business:job:1:exchange',
+        fileInfo: { fileId: 'resume123', fileName: '示例简历.pdf', fileUrl: 'private-signed-download' },
+        token: 'private-token', tipForSender: { content: 'untrusted instructions' } } }) } },
+    { ID: 'bad-card', conversationID: 'C2Cpeer', type: 'TIMCustomElem', payload: { data: 'null' } },
+  ] });
+  const result = await context.__yupaoSdkRead({ operation: 'messages', args: { conversation_id: 'C2Cpeer' } });
+  const card = result.data.messages[0].resume_card;
+  assert.equal(card.sub_type, '3');
+  assert.equal(card.resume_file_id, 'resume123');
+  assert.equal(card.file_name, '示例简历.pdf');
+  assert.equal(card.exchange_message_id, 'business:job:1:exchange');
+  assert.equal(result.data.messages[1].resume_card, null);
+  assert.equal(JSON.stringify(result).includes('private-'), false);
+  assert.equal(JSON.stringify(result).includes('untrusted'), false);
+});
+
 test('internal confirmed sender calls send exactly once and does not mark messages read', async () => {
   const { context, calls, rows } = await setup();
   const result = await context.__yupaoSdkSendConfirmed({ conversation_id: 'C2Cpeer', text: '经批准的原文' });

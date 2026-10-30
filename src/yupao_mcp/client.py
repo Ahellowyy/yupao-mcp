@@ -34,7 +34,8 @@ CITY_IDS = {'全国': 1, '北京': 2, '上海': 25, '广州': 76, '深圳': 77,
             '杭州': 383, '成都': 322, '南京': 220, '苏州': 221, '武汉': 180}
 WRITE_ENDPOINTS = {'application_precheck': '/job/v3/contact/job/im/preCheck',
                    'application_contact': '/job/v3/contact/job/im/call',
-                   'application_submit': '/reach/v2/im/chat/init'}
+                   'application_submit': '/reach/v2/im/chat/init',
+                   'chat_resume_send': '/reach/v2/im/exchange/applyExchange'}
 
 
 class YupaoError(Exception):
@@ -317,6 +318,45 @@ class YupaoClient:
                 'business_conversation_id': str(result['conversationId']),
                 'acknowledged': True, 'resume_file_id': resume_file_id,
                 'message_sent': False, 'delivery_verified': False}
+
+    def chat_resume_context(self, target):
+        """Read existing business-chat identity and rights; never unlock or pay."""
+        data = self.post('chat_detail', {'conversationId': target['business_conversation_id']})
+        if (not isinstance(data, dict)
+                or data.get('conversationId') != target['business_conversation_id']
+                or data.get('toUserImId') != target['peer_im_id']
+                or str(data.get('relatedJobId')) != target['related_job_id']):
+            raise YupaoError('JOB_CONVERSATION_MISMATCH', '业务会话接收方或岗位不匹配')
+        rights = data.get('rightsStatusInfo')
+        if not isinstance(rights, list) or any(not isinstance(r, dict) for r in rights):
+            raise YupaoError('SCHEMA_CHANGED', '会话权限结构未知')
+        send = [r for r in rights if r.get('type') == 'sendMsg']
+        resume = [r for r in rights if r.get('type') == 'exchangeResumeFile']
+        blockers = []
+        if data.get('isBlock') not in (False, 0) or data.get('toUserBlock') not in (False, 0):
+            blockers.append('会话存在屏蔽状态或状态未知')
+        if len(send) != 1 or send[0].get('value') is not True or send[0].get('hasImRight') != 1:
+            blockers.append('当前会话没有已确认的聊天权限，不自动解锁或购买权益')
+        # The production chat toolbar permits this branch only for status 1 or 3.
+        if (len(resume) != 1 or resume[0].get('value') is not True
+                or type(resume[0].get('status')) is not int or resume[0]['status'] not in (1, 3)):
+            blockers.append('平台当前未开放该会话的附件简历发送入口')
+        return {'can_send': not blockers, 'blockers': blockers}
+
+    def send_chat_resume(self, target, resume_file_id):
+        """Internal single-write adapter, invoked only by a claimed approved action."""
+        if (not isinstance(resume_file_id, str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', resume_file_id)):
+            raise YupaoError('INVALID_ARGUMENT', '须选择明确的本人附件 ID')
+        # A successful HTTP envelope only acknowledges the business request.
+        # Its response is deliberately not exported; SDK history proves the card.
+        self._write_post('chat_resume_send', {
+            'conversationId': target['business_conversation_id'],
+            'exchangeType': 'EXCHANGE_RESUME_FILE',
+            'extData': {'resumeFileId': resume_file_id}})
+        return {'acknowledged': True, 'resume_file_id': resume_file_id,
+                'business_conversation_id': target['business_conversation_id'],
+                'resume_sent': False, 'delivery_verified': False}
 
     def list_resume_attachments(self, for_chat=False):
         if not isinstance(for_chat, bool):

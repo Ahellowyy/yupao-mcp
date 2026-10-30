@@ -38,8 +38,8 @@ def review_text(action):
     return '\n'.join(lines)
 
 
-def resume_selection(client, resume_file_id):
-    rows = client.list_resume_attachments()['files']
+def resume_selection(client, resume_file_id, for_chat=False):
+    rows = client.list_resume_attachments(for_chat=True)['files'] if for_chat else client.list_resume_attachments()['files']
     matches = [r for r in rows if r['resume_file_id'] == resume_file_id]
     if len(matches) != 1 or matches[0]['check_status'] != 2:
         raise YupaoError('RESUME_NOT_READY', '须选择本人列表中审核通过的明确附件简历')
@@ -128,6 +128,57 @@ class ActionService:
                                           {'job_biz_id': job_biz_id, 'message': message})
         return {**self.public_action(action), 'requires_human_confirmation': True, 'message_sent': False}
 
+    async def _resume_history(self, target):
+        """Bounded full retained history, so older/manual shares also prevent repeats."""
+        messages, cursor, seen = [], '', set()
+        for _ in range(20):
+            page = await self.chat.get_messages(target['conversation_id'], **(
+                {'next_req_message_id': cursor} if cursor else {}))
+            for message in page['messages']:
+                if (str(message.get('custom_type')) == '710.1'
+                        and message.get('flow') == 'out' and not message.get('is_revoked')):
+                    card = message.get('resume_card')
+                    if (message.get('to') != target['peer_im_id'] or not isinstance(card, dict)
+                            or card.get('sub_type') not in ('1', '2', '3')
+                            or (card['sub_type'] == '3' and not card.get('resume_file_id'))):
+                        raise YupaoError('RESUME_HISTORY_UNKNOWN', '附件历史结构不明，未继续发送')
+            messages.extend(page['messages'])
+            if page.get('is_completed') is True:
+                return messages
+            next_cursor = page.get('next_req_message_id')
+            if not next_cursor or next_cursor in seen:
+                break
+            seen.add(next_cursor)
+            cursor = next_cursor
+        raise YupaoError('HISTORY_INCOMPLETE', '未完成历史核对，不能排除已有简历发送，未继续发送')
+
+    @staticmethod
+    def _resume_duplicate(messages, target, resume_file_id):
+        return any(m.get('flow') == 'out' and m.get('to') == target['peer_im_id']
+            and not m.get('is_revoked') and isinstance(m.get('resume_card'), dict)
+            and (m['resume_card'].get('resume_file_id') == resume_file_id
+                 or m['resume_card'].get('sub_type') == '1') for m in messages)
+
+    async def prepare_resume(self, job_biz_id, conversation_id, resume_file_id):
+        account = await asyncio.to_thread(self.client.account_key)
+        job = await asyncio.to_thread(self.client.detail, job_biz_id)
+        target = await self._target(conversation_id, job)
+        resume = await asyncio.to_thread(resume_selection, self.client, resume_file_id, True)
+        context = await asyncio.to_thread(self.client.chat_resume_context, target)
+        messages = await self._resume_history(target)
+        blockers = list(context['blockers'])
+        if self._resume_duplicate(messages, target, resume_file_id):
+            blockers.append('聊天记录中已发过该附件或有待处理的附件请求，不重复发送')
+        review = {'operation': '向已有 HR 会话发送指定附件简历', 'target': target,
+            'company': job['company'], 'job_title': job['title'], 'job_biz_id': job_biz_id,
+            'resume': resume, 'message': None, 'account_fingerprint': account[:12],
+            'can_execute': not blockers, 'blockers': blockers,
+            'platform_side_effects': '平台生成附件简历卡片或交换请求；不附加文本、不重新开聊、不交换电话微信。'}
+        payload = {'job_biz_id': job_biz_id, 'job_hash': digest(job), 'target': target, 'resume': resume}
+        action = self.store.prepare_action(account, 'chat_resume', review, payload,
+            {'business_conversation_id': target['business_conversation_id'], 'resume_file_id': resume_file_id})
+        return {**self.public_action(action), 'requires_human_confirmation': True, 'resume_sent': False}
+
     async def prepare_new_message(self, job_biz_id, message):
         if not isinstance(message, str) or not message.strip() or len(message) > 5000:
             raise YupaoError('INVALID_ARGUMENT', '消息正文须为 1–5000 字')
@@ -154,6 +205,19 @@ class ActionService:
         payload = action['payload']
         if action_review_hash(action['account'], action['kind'], action['review'], action['payload']) != action['review_hash']:
             raise YupaoError('PREVIEW_CHANGED', '预览内容已改变，需重新生成并确认')
+        if action['kind'] == 'chat_resume':
+            job = await asyncio.to_thread(self.client.detail, payload['job_biz_id'])
+            target = await self._target(payload['target']['conversation_id'], job)
+            resume = await asyncio.to_thread(resume_selection, self.client, payload['resume']['resume_file_id'], True)
+            if digest(job) != payload['job_hash'] or target != payload['target'] or resume != payload['resume']:
+                raise YupaoError('TARGET_CHANGED', '岗位、HR 或简历已改变，请重新预览')
+            context = await asyncio.to_thread(self.client.chat_resume_context, target)
+            if not context['can_send']:
+                raise YupaoError('RESUME_SEND_NOT_AVAILABLE', '平台会话权限不允许本次附件发送')
+            messages = await self._resume_history(target)
+            if self._resume_duplicate(messages, target, resume['resume_file_id']):
+                raise YupaoError('RESUME_ALREADY_SHARED', '已有该附件发送记录或待处理请求，未再次发送')
+            return account, {'target': target, 'before_ids': [m['message_id'] for m in messages]}
         if action['kind'] == 'message':
             if payload.get('start_conversation'):
                 context = await asyncio.to_thread(self.client.job_action_context, payload['job_biz_id'])
@@ -183,6 +247,8 @@ class ActionService:
         action = self.store.action(action_id)
         if action['status'] != 'approved' or action['expires'] <= time.time():
             raise YupaoError('CONFIRMATION_REQUIRED', '该具体操作尚未获有效批准')
+        if not action['review']['can_execute']:
+            raise YupaoError('ACTION_BLOCKED', '该预览存在限制，请重新核对，未执行')
         account, context = await self._preflight(action)
         self.store.claim(action_id, account, action['review_hash'])
         receipt = {}
@@ -203,6 +269,26 @@ class ActionService:
                     for m in history['messages'])
                 receipt['confirmed_in_history'] = confirmed
                 status = 'sent' if confirmed else 'outcome_unknown'
+            elif action['kind'] == 'chat_resume':
+                target = context['target']
+                receipt = await asyncio.to_thread(self.client.send_chat_resume, target,
+                                                 action['payload']['resume']['resume_file_id'])
+                messages = await self._resume_history(target)
+                matches = [m for m in messages if m.get('message_id') not in context['before_ids']
+                    and m.get('flow') == 'out' and m.get('to') == target['peer_im_id']
+                    and m.get('status') == 'success' and not m.get('is_revoked') and m.get('resume_card', {})
+                    and m['resume_card'].get('resume_file_id') == action['payload']['resume']['resume_file_id']
+                    and m['resume_card'].get('sub_type') in ('1', '3')]
+                if len(matches) == 1:
+                    card = matches[0]
+                    shared = card['resume_card']['sub_type'] == '3'
+                    receipt.update(message_id=card['message_id'], confirmed_in_history=True,
+                        resume_sent=shared, request_sent=not shared,
+                        exchange_state='attachment_shared' if shared else 'awaiting_peer_consent')
+                    status = 'sent' if shared else 'submitted'
+                else:
+                    receipt['confirmed_in_history'] = False
+                    status = 'outcome_unknown'
             elif action['kind'] == 'application':
                 receipt = await asyncio.to_thread(self.client.submit_attachment_application, context,
                                                  action['payload']['resume']['resume_file_id'])

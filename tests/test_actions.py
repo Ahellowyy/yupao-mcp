@@ -20,7 +20,7 @@ class Client:
         self.app_calls = 0
     def account_key(self): return self.account
     def detail(self, key): return copy.deepcopy(self.job)
-    def list_resume_attachments(self): return {'files': [copy.deepcopy(self.resume)]}
+    def list_resume_attachments(self, for_chat=False): return {'files': [copy.deepcopy(self.resume)]}
     def job_action_context(self, key):
         return {'job': self.detail(key), 'hr_name': '示例 HR', 'owner_key': 'owner1', 'ordinary_job': True,
                 'open': True, 'attachment_allowed': self.available, 'already_applied': False,

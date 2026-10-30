@@ -67,6 +67,7 @@ def yupao_capabilities() -> dict:
             'message': 'single_confirmed_sdk_execution_unverified_live', 'writes_enabled': writes_enabled(),
             'session_file_configured': bool(client.session_file),
             'resume_attachments': 'authenticated_read',
+            'chat_resume_send': 'single_confirmed_business_api_unverified_live',
             'messaging_session': 'credential_availability_check_only',
             'conversations': 'optional_chat_sdk_read', 'chat_history': 'optional_chat_sdk_read',
             'presets': True, 'shortlist': True, 'matching': 'host_ai_with_evidence_validation',
@@ -124,6 +125,12 @@ def yupao_prepare_application(job_biz_id: str, resume_file_id: str = '') -> dict
             return actions.prepare_application(job_biz_id, resume_file_id)
         return {**save_draft(DATA_DIR, 'application', client.detail(job_biz_id)), 'executable': False}
     return call(prepare)
+
+
+@mcp.tool(annotations=DRAFT)
+async def yupao_prepare_resume(job_biz_id: str, conversation_id: str, resume_file_id: str) -> dict:
+    """预览向已有 HR 会话发送本人指定附件简历，核对权限及历史防重；需逐次真人确认，不发送文本。"""
+    return await async_call(actions.prepare_resume, job_biz_id, conversation_id, resume_file_id)
 
 
 @mcp.tool(annotations=DRAFT)
